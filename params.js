@@ -13,7 +13,7 @@
  * (tools/server/server-schema.cpp). `min`/`max`/`step` come from the schema
  * limits where they exist, plus llama.cpp's documented ranges otherwise.
  *
- * type:       'float' | 'int' | 'bool' | 'string' | 'stringArray' | 'json'
+ * type:       'float' | 'int' | 'bool' | 'string' | 'stringList' | 'json'
  * group:      rendering bucket
  * stNative:   SillyTavern already sends this from its own slider on the Custom source
  * advanced:   hidden behind the "Advanced" disclosure, off by default
@@ -105,7 +105,7 @@ export const PARAM_METADATA = {
         desc: 'How many tokens to scan for repetitions (0 = disabled, -1 = context size)',
     },
     dry_sequence_breakers: {
-        type: 'stringArray', group: 'dry',
+        type: 'stringList', group: 'dry',
         desc: 'Sequence breakers for DRY sampling. Must be a NON-EMPTY array of strings; the server rejects an empty array.',
     },
 
@@ -133,7 +133,7 @@ export const PARAM_METADATA = {
 
     // --- request pipeline (not sampling per se) ---
     samplers: {
-        type: 'stringArray', group: 'pipeline', advanced: true,
+        type: 'stringList', group: 'pipeline', advanced: true,
         desc: 'The order in which samplers are applied. An array of sampler type names, or a single string of sampler chars',
     },
     ignore_eos: {
@@ -145,7 +145,7 @@ export const PARAM_METADATA = {
         desc: 'If greater than 0, output the probabilities of top N tokens for each generated token (alias: logprobs)',
     },
     stop: {
-        type: 'stringArray', group: 'pipeline', advanced: true,
+        type: 'stringList', group: 'pipeline', advanced: true,
         desc: 'Stop sequences. Falls back to the server CLI defaults when empty.',
     },
     max_tokens: {
@@ -181,7 +181,7 @@ export const PARAM_METADATA = {
         desc: 'Grammar trigger definitions',
     },
     preserved_tokens: {
-        type: 'stringArray', group: 'pipeline', advanced: true,
+        type: 'stringList', group: 'pipeline', advanced: true,
         desc: 'Tokens that are preserved when using grammars',
     },
     chat_format: {
@@ -368,7 +368,7 @@ export function inferSpec(key, value) {
 
     if (Array.isArray(value)) {
         const primitive = value.every(v => ['string', 'number', 'boolean'].includes(typeof v));
-        return { ...base, type: primitive ? 'stringArray' : 'json' };
+        return { ...base, type: primitive ? 'stringList' : 'json' };
     }
 
     if (value !== null && typeof value === 'object') {
@@ -403,9 +403,8 @@ export function coerceValue(spec, raw) {
         }
         case 'bool':
             return raw === true || raw === 'true' || raw === 1 || raw === '1';
-        case 'stringArray':
-            if (Array.isArray(raw)) return raw.map(String);
-            return String(raw).trim() === '' ? [] : [String(raw)];
+        case 'stringList':
+            return listItemsFromValue(raw);
         case 'json': {
             if (typeof raw !== 'string') return raw;
             try {
@@ -698,6 +697,47 @@ export function propsUrlFromBase(baseUrl) {
         if (/\/props$/i.test(trimmed)) return trimmed;
         return `${trimmed.replace(/\/v1$/i, '')}/props`;
     }
+}
+
+/**
+ * Normalize anything that may hold a list of strings - a real array from /props,
+ * a JSON array typed into an older build of this extension, or a lone string -
+ * into an array, for rendering list controls.
+ */
+export function listItemsFromValue(value) {
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return [];
+        if (text.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(text);
+                if (Array.isArray(parsed)) return parsed.map(String);
+            } catch {
+                // Not JSON after all; treat it as one item below.
+            }
+        }
+        return [text];
+    }
+    if (value === undefined || value === null) return [];
+    return [String(value)];
+}
+
+const LIST_ESCAPES = { '\\': '\\', n: '\n', r: '\r', t: '\t' };
+
+/**
+ * Render a list item for a text input, so control characters are visible.
+ * A real newline (a very common DRY sequence breaker) would otherwise be an
+ * invisible character in a single-line field.
+ */
+export function escapeListItem(value) {
+    const map = { '\n': '\\n', '\r': '\\r', '\t': '\\t', '\\': '\\\\' };
+    return String(value ?? '').replace(/[\n\r\t\\]/g, ch => map[ch]);
+}
+
+/** Turn what the user typed back into the real string. */
+export function unescapeListItem(text) {
+    return String(text ?? '').replace(/\\([nrt\\])/g, (_, ch) => LIST_ESCAPES[ch]);
 }
 
 /** True when a `/props` payload looks like a llama.cpp server. */

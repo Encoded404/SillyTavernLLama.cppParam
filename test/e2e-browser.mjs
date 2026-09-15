@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 
 import { openPage } from './cdp.mjs';
 
@@ -98,6 +99,17 @@ try {
         await dismissModals();
         await page.waitFor(`SillyTavern.getContext().characters?.length > 0`, 30000, 'character list after reload');
     }
+
+    // Start from a clean slate. The extension's rows live in SillyTavern's
+    // settings, which persist server-side, so a previous run's edits would
+    // otherwise leak into this one. The next probe re-seeds everything from /props.
+    await page.evaluate(`(async () => {
+        const ctx = SillyTavern.getContext();
+        delete ctx.extensionSettings['st_llamacpp_samplers'];
+        try { localStorage.removeItem('st-llamacpp-samplers:apiKey'); } catch { /* storage unavailable */ }
+        ctx.saveSettingsDebounced();
+        return true;
+    })()`);
 
     /* ---------------------------------------------------- 1. panel mounts -- */
     const mountInfo = JSON.parse(await page.evaluate(`JSON.stringify({
@@ -293,6 +305,22 @@ try {
         }
     });
 
+    const breakers = JSON.parse(await page.evaluate(`JSON.stringify({
+        items: [...document.querySelectorAll('#llamasampler_panel .llamasampler-list[data-key="dry_sequence_breakers"] .llamasampler-list-input')]
+            .map(input => input.value),
+        hasAdd: !!document.querySelector('#llamasampler_panel .llamasampler-list[data-key="dry_sequence_breakers"] .llamasampler-list-add'),
+        hasRemove: document.querySelectorAll('#llamasampler_panel .llamasampler-list[data-key="dry_sequence_breakers"] .llamasampler-list-remove').length,
+    })`));
+
+    check('dry_sequence_breakers is a per-entry list, not a JSON blob', () => {
+        assert.equal(breakers.items.length, 7, JSON.stringify(breakers.items));
+        // A real newline must be visible as an escape, not an invisible character.
+        assert.equal(breakers.items[0], '\\n', JSON.stringify(breakers.items));
+        assert.deepEqual(breakers.items.slice(1), [':', '"', '*', '.', '!', '?']);
+        assert.ok(breakers.hasAdd, 'expected an Add button');
+        assert.equal(breakers.hasRemove, 7, 'each entry needs its own remove button');
+    });
+
     const topK = JSON.parse(await page.evaluate(`JSON.stringify({
         value: document.querySelector('#llamasampler_panel .llamasampler-number[data-key="top_k"]')?.value,
         slider: document.querySelector('#llamasampler_panel .llamasampler-range[data-key="top_k"]')?.value,
@@ -454,6 +482,54 @@ try {
             assert.equal(body.presence_penalty, 0.15);
         });
     }
+
+    /* -------------------------------- 8. editing the list control -- */
+    // Runs last so the generation assertions above still see the original list.
+    const listMerged = await page.evaluate(`(async () => {
+        const list = document.querySelector('#llamasampler_panel .llamasampler-list[data-key="dry_sequence_breakers"]');
+
+        // Remove the last entry ("?").
+        const removers = list.querySelectorAll('.llamasampler-list-remove');
+        removers[removers.length - 1].click();
+        await new Promise(r => setTimeout(r, 200));
+
+        // Add a new one and type into it.
+        list.querySelector('.llamasampler-list-add').click();
+        await new Promise(r => setTimeout(r, 200));
+        const inputs = list.querySelectorAll('.llamasampler-list-input');
+        const added = inputs[inputs.length - 1];
+        added.value = 'END';
+        added.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+
+        const counts = {
+            items: list.querySelectorAll('.llamasampler-list-item').length,
+            emptyHintHidden: list.querySelector('.llamasampler-list-empty')?.classList.contains('llamasampler-hidden'),
+        };
+
+        // Feed the row through the real request-body path.
+        const ctx = SillyTavern.getContext();
+        const data = { custom_include_body: '' };
+        await ctx.eventSource.emit(ctx.eventTypes.CHAT_COMPLETION_SETTINGS_READY, data);
+
+        return JSON.stringify({ counts, includeBody: data.custom_include_body });
+    })()`);
+
+    const listResult = JSON.parse(listMerged);
+    const mergedYaml = YAML.parse(listResult.includeBody);
+
+    check('removing and adding list entries updates the row', () => {
+        assert.equal(listResult.counts.items, 7, 'removed one and added one');
+        assert.equal(listResult.counts.emptyHintHidden, true);
+    });
+
+    check('list edits reach the request body as real values, newline included', () => {
+        assert.deepEqual(
+            mergedYaml.dry_sequence_breakers,
+            ['\n', ':', '"', '*', '.', '!', 'END'],
+            listResult.includeBody,
+        );
+    });
 
     if (page.consoleErrors.length) {
         console.log('\npage console errors (first 5):');

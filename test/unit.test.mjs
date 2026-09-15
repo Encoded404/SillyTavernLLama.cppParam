@@ -28,6 +28,9 @@ import {
     describeFailure,
     pickApiKey,
     resolveApiKey,
+    listItemsFromValue,
+    escapeListItem,
+    unescapeListItem,
     tokenize,
 } from '../params.js';
 
@@ -159,7 +162,7 @@ test('inferSpec: covers every value shape', () => {
     assert.equal(inferSpec('a', true).type, 'bool');
     assert.equal(inferSpec('a', 3).type, 'int');
     assert.equal(inferSpec('a', 0.25).type, 'float');
-    assert.equal(inferSpec('a', ['x']).type, 'stringArray');
+    assert.equal(inferSpec('a', ['x']).type, 'stringList');
     assert.equal(inferSpec('a', [{ x: 1 }]).type, 'json');
     assert.equal(inferSpec('a', { x: 1 }).type, 'json');
     assert.equal(inferSpec('a', 'text').type, 'string');
@@ -400,6 +403,56 @@ test('resolveApiKey: the extension field wins, then SillyTavern\'s, with trimmin
     assert.equal(resolveApiKey(undefined, '  theirs  '), 'theirs');
     assert.equal(resolveApiKey(undefined, undefined), '');
     assert.equal(resolveApiKey(null, null), '');
+});
+
+/* ------------------------------------------------------------- lists -- */
+
+test('listItemsFromValue: normalizes arrays, JSON text and plain strings', () => {
+    assert.deepEqual(listItemsFromValue(['\n', ':', '"']), ['\n', ':', '"']);
+    // Rows saved by an older build kept the JSON text in the row.
+    assert.deepEqual(listItemsFromValue('["\\n", ":"]'), ['\n', ':']);
+    assert.deepEqual(listItemsFromValue('plain'), ['plain']);
+    assert.deepEqual(listItemsFromValue(''), []);
+    assert.deepEqual(listItemsFromValue('   '), []);
+    assert.deepEqual(listItemsFromValue(undefined), []);
+    assert.deepEqual(listItemsFromValue(null), []);
+    assert.deepEqual(listItemsFromValue(7), ['7']);
+    // Not JSON: keep it as a literal entry rather than losing it.
+    assert.deepEqual(listItemsFromValue('[not json'), ['[not json']);
+});
+
+test('escapeListItem / unescapeListItem: control characters survive a round trip', () => {
+    const items = ['\n', '\t', '\r', '\\', ':', '"', '*', 'plain', 'back\\slash', 'a\nb'];
+
+    for (const item of items) {
+        assert.equal(unescapeListItem(escapeListItem(item)), item, `round trip failed for ${JSON.stringify(item)}`);
+    }
+
+    assert.equal(escapeListItem('\n'), '\\n');
+    assert.equal(escapeListItem('\\'), '\\\\');
+    assert.equal(unescapeListItem('\\n'), '\n');
+    assert.equal(unescapeListItem('\\t'), '\t');
+    // An unknown escape is left alone rather than swallowed.
+    assert.equal(unescapeListItem('a\\qb'), 'a\\qb');
+});
+
+test('a real DRY sequence breaker list stays legible while editing', () => {
+    const real = ['\n', ':', '"', '*', '.', '!', '?'];
+
+    // What the inputs show...
+    const shown = real.map(escapeListItem);
+    assert.deepEqual(shown, ['\\n', ':', '"', '*', '.', '!', '?']);
+
+    // ...and what we send back is the original.
+    assert.deepEqual(shown.map(unescapeListItem), real);
+});
+
+test('coerceValue: a string list accepts arrays, JSON text and single values', () => {
+    const spec = specFor('dry_sequence_breakers', undefined);
+    assert.deepEqual(coerceValue(spec, ['a', 'b']), ['a', 'b']);
+    assert.deepEqual(coerceValue(spec, '["\\n", ":"]'), ['\n', ':']);
+    assert.deepEqual(coerceValue(spec, 'solo'), ['solo']);
+    assert.deepEqual(coerceValue(spec, ''), []);
 });
 
 /* ------------------------------------------------------- error reporting -- */

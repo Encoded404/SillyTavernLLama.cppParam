@@ -34,6 +34,10 @@ through `custom_include_body`, but there is no UI for it. This extension is that
   sent, so anything you leave alone stays at your server's CLI default.
 - **Server defaults on screen.** Each row shows what the server currently resolves,
   so you can see exactly what you are overriding.
+- **String lists are editable entry by entry.** `dry_sequence_breakers`, `stop`,
+  `samplers` and `preserved_tokens` get a list control with add and remove buttons
+  instead of a JSON blob, and control characters are shown escaped so a real
+  newline reads as `\n` rather than being invisible.
 - **Live payload preview.** Shows the exact YAML appended to the request.
 - **Your own `custom_include_body` is preserved.** The merge is key-wise, so your
   hand-written entries (including nested ones like `logit_bias`) survive and no
@@ -308,6 +312,19 @@ Restart SillyTavern afterwards. The extension appears in the *Extensions* list a
 5. Enable **Advanced / request pipeline** (collapsed by default) for non-sampling
    knobs such as `stop`, `n_predict`, `logit_bias`, `grammar` and the `samplers`
    order. You rarely need these.
+
+### Editing string lists
+
+String lists are edited as individual entries rather than as JSON:
+
+- **Add** appends an empty entry and focuses it; the **×** on each entry removes it.
+- Entries are shown **escaped**, so the usual DRY sequence breaker set reads as
+  `\n` `:` `"` `*` `.` `!` `?` instead of `["\n",":","\"","*",".","!","?"]`.
+- Backslash escapes are accepted on input: `\n`, `\t`, `\r` and `\\`. Anything
+  else, such as `\q`, is kept literally, so nothing is silently rewritten.
+- **Empty entries are dropped** when building the request. This matters for
+  `dry_sequence_breakers`, because llama.cpp *rejects* an empty array rather than
+  falling back — an empty list simply is not sent.
 
 ## How it works
 

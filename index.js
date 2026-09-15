@@ -33,6 +33,9 @@ import {
     describeFailure,
     pickApiKey,
     resolveApiKey,
+    listItemsFromValue,
+    escapeListItem,
+    unescapeListItem,
     AUTH_HINT,
 } from './params.js';
 
@@ -193,21 +196,6 @@ function sortKeys(keys) {
 
 /** Normalise a control value into what should end up in the request body. */
 function normalizeRowValue(spec, raw) {
-    // String arrays are edited as JSON-ish text in the UI.
-    if (spec.type === 'stringArray' && typeof raw === 'string') {
-        const text = raw.trim();
-        if (text === '') return [];
-        if (text.startsWith('[')) {
-            try {
-                const parsed = JSON.parse(text);
-                return Array.isArray(parsed) ? parsed.map(String) : undefined;
-            } catch {
-                return undefined;
-            }
-        }
-        return [text];
-    }
-
     return coerceValue(spec, raw);
 }
 
@@ -447,7 +435,9 @@ function buildValueControl(spec, key, value) {
                 + `<input type="number" class="neo-range-input llamasampler-number" ${attrs} value="${safe}">`;
         }
 
-        case 'stringArray':
+        case 'stringList':
+            return buildListControl(key, listItemsFromValue(value));
+
         case 'json': {
             const text = value === undefined || value === null ? '' : JSON.stringify(value);
             return `<input type="text" class="text_pole llamasampler-text" data-key="${escapeAttr(key)}" value="${escapeAttr(text)}">`;
@@ -456,6 +446,66 @@ function buildValueControl(spec, key, value) {
         default:
             return `<input type="text" class="text_pole llamasampler-text" data-key="${escapeAttr(key)}" value="${escapeAttr(value ?? '')}">`;
     }
+}
+
+/** One editable entry in a list control. */
+function listItemMarkup(key, index, value) {
+    return `<div class="llamasampler-list-item" data-index="${index}">
+        <input type="text" class="text_pole llamasampler-list-input" data-key="${escapeAttr(key)}" data-index="${index}"
+            value="${escapeAttr(escapeListItem(value))}"
+            title="Backslash escapes are accepted: \\n, \\t, \\r, \\\\">
+        <div class="menu_button menu_button_icon llamasampler-list-remove" title="Remove this entry">
+            <i class="fa-solid fa-xmark"></i>
+        </div>
+    </div>`;
+}
+
+/**
+ * A list control, so string lists (DRY sequence breakers, stop strings, sampler
+ * order) can be edited one entry at a time instead of as a JSON blob. Entries
+ * are shown escaped, so a real newline reads as `\n` rather than being invisible.
+ */
+function buildListControl(key, items) {
+    const rows = items.map((item, index) => listItemMarkup(key, index, item)).join('');
+    const emptyClass = items.length ? ' llamasampler-hidden' : '';
+
+    return `<div class="llamasampler-list" data-key="${escapeAttr(key)}">
+        <div class="llamasampler-list-items">${rows}</div>
+        <div class="llamasampler-list-empty llamasampler-muted${emptyClass}">no entries</div>
+        <div class="menu_button menu_button_icon llamasampler-list-add" title="Add an entry">
+            <i class="fa-solid fa-plus"></i><span>Add</span>
+        </div>
+    </div>`;
+}
+
+/** Read the entries currently held by a list control. */
+function readListValue($list) {
+    return $list.find('.llamasampler-list-input').toArray()
+        .map(input => unescapeListItem(input.value))
+        .filter(item => item !== '');
+}
+
+/** Store a list control's current entries on its row. */
+function updateListRow($list) {
+    if (!$list.length) return;
+
+    const row = ensureRow(String($list.data('key')));
+    row.value = readListValue($list);
+    row.touched = true;
+    saveSettings();
+    renderPreview();
+}
+
+/** Keep row indices and the empty hint in step after adding or removing. */
+function refreshListChrome($list) {
+    const $items = $list.find('.llamasampler-list-item');
+
+    $items.each((index, item) => {
+        jQuery(item).attr('data-index', index);
+        jQuery(item).find('.llamasampler-list-input').attr('data-index', index);
+    });
+
+    $list.find('.llamasampler-list-empty').toggleClass('llamasampler-hidden', $items.length > 0);
 }
 
 function buildRow(key) {
@@ -544,12 +594,25 @@ function renderPreview() {
     $preview.text(Object.keys(overrides).length ? buildIncludeBody('', overrides) : '# nothing enabled yet');
 }
 
+/** True while the user is typing somewhere inside the panel. */
+function panelHasTextFocus() {
+    const active = document.activeElement;
+    const panel = document.getElementById(PANEL_ID);
+    return !!(active && panel && panel.contains(active) && active.matches('input, textarea, select'));
+}
+
 function render() {
     const $panel = jQuery(`#${PANEL_ID}`);
     if (!$panel.length) return;
 
     $panel.find('.llamasampler-status').html(renderStatus());
-    $panel.find('.llamasampler-groups').html(renderGroups());
+
+    // Rebuilding the rows would replace the element the user is typing into, so
+    // leave them alone until focus leaves the panel.
+    if (!panelHasTextFocus()) {
+        $panel.find('.llamasampler-groups').html(renderGroups());
+    }
+
     renderPreview();
 }
 
@@ -577,8 +640,9 @@ function applyCliFlags() {
         settings.rows[key] = {
             enabled: true,
             touched: true,
-            // Keep an editable representation in the row.
-            value: spec.type === 'stringArray' || spec.type === 'json' ? JSON.stringify(value) : value,
+            // Lists stay arrays so the list control can render them directly;
+            // free-form objects are kept as text for the JSON control.
+            value: spec.type === 'json' ? JSON.stringify(value) : value,
         };
     }
 
@@ -651,7 +715,40 @@ function bindEvents() {
         renderPreview();
     });
 
+    /* -------------------------------------------------------- list control -- */
+
+    $panel.on('input', '.llamasampler-list-input', function () {
+        updateListRow(jQuery(this).closest('.llamasampler-list'));
+    });
+
+    $panel.on('click', '.llamasampler-list-remove', function () {
+        const $list = jQuery(this).closest('.llamasampler-list');
+        jQuery(this).closest('.llamasampler-list-item').remove();
+        refreshListChrome($list);
+        updateListRow($list);
+    });
+
+    $panel.on('click', '.llamasampler-list-add', function () {
+        const $list = jQuery(this).closest('.llamasampler-list');
+        const key = $list.data('key');
+        const $items = $list.find('.llamasampler-list-items');
+        const index = $items.children().length;
+
+        const $item = jQuery(listItemMarkup(key, index, ''));
+        $items.append($item);
+        refreshListChrome($list);
+        updateListRow($list);
+        $item.find('.llamasampler-list-input').trigger('focus');
+    });
+
     $panel.on('click', '.llamasampler-refresh', () => probeServer());
+
+    // render() defers while the panel has focus, so catch up once it loses it.
+    $panel.on('focusout', () => {
+        setTimeout(() => {
+            if (!panelHasTextFocus()) render();
+        }, 0);
+    });
 
     // The key is kept in localStorage only; it is never written to the settings
     // SillyTavern syncs, and it is never logged.
