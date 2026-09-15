@@ -1,0 +1,31 @@
+{
+    "name": "sillytavern-llamacpp-samplers",
+    "version": "1.0.0",
+    "private": true,
+    "description": "SillyTavern extension that exposes llama.cpp's full sampler set on the Custom (OpenAI-compatible) endpoint",
+    "type": "module",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Encoded404/SillyTavernLLama.cppParam.git"
+    },
+    "keywords": [
+        "sillytavern",
+        "sillytavern-extension",
+        "llama.cpp",
+        "sampling",
+        "dry",
+        "top-k",
+        "min-p"
+    ],
+    "scripts": {
+        "test": "node --test test/unit.test.mjs",
+        "test:backend": "node test/e2e-backend.mjs",
+        "test:browser": "node test/e2e-browser.mjs",
+        "mock": "node test/mock-llamacpp.mjs",
+        "install-extension": "node install.mjs"
+    },
+    "devDependencies": {
+        "yaml": "^2.9.1"
+    }
+}

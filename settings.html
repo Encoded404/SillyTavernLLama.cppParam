@@ -1,0 +1,32 @@
+<div id="llamasampler_panel" class="range-block" data-source="custom">
+    <div class="range-block-title" data-i18n="llama.cpp samplers">llama.cpp samplers</div>
+    <div class="llamasampler-toolbar">
+        <span class="llamasampler-status"></span>
+        <div class="menu_button menu_button_icon llamasampler-refresh"
+            title="Re-read parameters from GET /props"
+            data-i18n="[title]Re-read parameters from GET /props">
+            <i class="fa-solid fa-rotate"></i>
+            <span data-i18n="Refresh">Refresh</span>
+        </div>
+        <div class="menu_button menu_button_icon llamasampler-cli-toggle"
+            title="Paste a llama.cpp command line and import its sampling flags"
+            data-i18n="[title]Paste a llama.cpp command line and import its sampling flags">
+            <i class="fa-solid fa-terminal"></i>
+            <span data-i18n="Import CLI flags">Import CLI flags</span>
+        </div>
+    </div>
+    <div id="llamasampler_cli_box" class="llamasampler-cli llamasampler-hidden">
+        <textarea id="llamasampler_cli" class="text_pole textarea_compact monospace" rows="4"
+            placeholder="--temp 0.9 --top-k 64 --min-p 0.06 --dry-sequence-breaker $'\n'"
+            data-i18n="[placeholder]Paste llama.cpp flags here"></textarea>
+        <div class="llamasampler-cli-actions">
+            <div class="menu_button llamasampler-cli-apply" data-i18n="Apply">Apply</div>
+            <span id="llamasampler_cli_warn" class="llamasampler-muted"></span>
+        </div>
+    </div>
+    <div class="llamasampler-groups"></div>
+    <details class="llamasampler-preview">
+        <summary data-i18n="Merged custom_include_body preview">Merged custom_include_body preview</summary>
+        <pre id="llamasampler_preview"></pre>
+    </details>
+</div>

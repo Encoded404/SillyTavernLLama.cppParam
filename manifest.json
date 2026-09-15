@@ -1,0 +1,18 @@
+{
+    "display_name": "llama.cpp Samplers (Custom endpoint)",
+    "loading_order": 120,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Encoded",
+    "version": "1.0.0",
+    "homePage": "https://github.com/Encoded404/SillyTavernLLama.cppParam",
+    "auto_update": true,
+    "minimum_client_version": "1.18.0",
+    "dependencies": [],
+    "requires": [],
+    "optional": [],
+    "hooks": {
+        "activate": "onActivate",
+        "clean": "onClean"
+    }
+}

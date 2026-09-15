@@ -1,0 +1,9 @@
+# Dependencies (test-only; the extension itself has none)
+node_modules/
+
+# Test artifacts
+test/received.json
+
+# Editor / OS noise
+.DS_Store
+*.log

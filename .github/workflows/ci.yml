@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Validate manifest.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            for (const k of ['display_name', 'js', 'author', 'version']) {
+              if (!m[k]) throw new Error('manifest missing ' + k);
+            }
+            console.log('manifest ok:', m.display_name, m.version);
+          "
+
+      - name: Syntax check extension entry points
+        run: |
+          node --check index.js
+          node --check params.js
+
+      - name: Check the extension payload is complete
+        run: |
+          for f in manifest.json index.js params.js style.css settings.html; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
