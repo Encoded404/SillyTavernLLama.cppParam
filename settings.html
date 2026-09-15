@@ -23,6 +23,30 @@
             <span data-i18n="Import CLI flags">Import CLI flags</span>
         </div>
     </div>
+    <details class="llamasampler-auth">
+        <summary data-i18n="llama.cpp API key (optional, this browser only)">llama.cpp API key (optional, this browser only)</summary>
+        <div class="llamasampler-auth-body">
+            <div class="llamasampler-auth-inputs">
+                <input id="llamasampler_api_key" type="password" class="text_pole" autocomplete="off" spellcheck="false"
+                    placeholder="only needed when llama.cpp runs with --api-key"
+                    data-i18n="[placeholder]only needed when llama.cpp runs with --api-key">
+                <div class="menu_button menu_button_icon llamasampler-key-reveal" title="Show or hide the key">
+                    <i class="fa-solid fa-eye"></i>
+                </div>
+                <div class="menu_button menu_button_icon llamasampler-key-clear" title="Forget the stored key">
+                    <i class="fa-solid fa-trash-can"></i>
+                </div>
+            </div>
+            <div class="llamasampler-warning">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span data-i18n="llamasampler-key-warning">Stored unencrypted in this browser (localStorage) and
+                    never written to SillyTavern's settings, so it stays on this machine and does not follow your
+                    account. It is still a secret: anything else running on this page can read it, and the browser
+                    will send it to whatever URL is in the endpoint field. Only the server plugin route needs no
+                    key here at all - prefer that when you can.</span>
+            </div>
+        </div>
+    </details>
     <div id="llamasampler_cli_box" class="llamasampler-cli llamasampler-hidden">
         <textarea id="llamasampler_cli" class="text_pole textarea_compact monospace" rows="4"
             placeholder="--temp 0.9 --top-k 64 --min-p 0.06 --dry-sequence-breaker $'\n'"

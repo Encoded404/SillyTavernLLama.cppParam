@@ -118,6 +118,38 @@ enables a general-purpose proxy for anything that can reach your SillyTavern
 (and is exempted from CSRF protection, which is why it ships disabled), so prefer
 the plugin if you have a choice.
 
+### The API key field
+
+If llama.cpp runs with `--api-key` and you want to use a browser-side route
+(`direct` or `CORS proxy`), open **llama.cpp API key** in the panel and paste the
+key there. The key is used for `/props` lookups and nothing else. It is masked by
+default, and there is a reveal button and a clear button.
+
+The panel labels this as unsafe on purpose, because it is:
+
+> Stored unencrypted in this browser (localStorage) and never written to
+> SillyTavern's settings, so it stays on this machine and does not follow your
+> account. It is still a secret: anything else running on this page can read it,
+> and the browser will send it to whatever URL is in the endpoint field.
+
+**Where the key is stored, and why not a cookie.** It goes in `localStorage` under
+`st-llamacpp-samplers:apiKey`, not in a cookie:
+
+| Storage | Behaviour |
+| --- | --- |
+| `extensionSettings` | ❌ written to `settings.json` on the **server** and synced with the account — exactly what we want to avoid |
+| Cookie | ⚠️ automatically attached to **every** request to the SillyTavern origin, including ones that have nothing to do with llama.cpp, so it ends up in server logs, proxies and any request-tracing |
+| `localStorage` ✅ | read only by this extension, sent only to the endpoint you configured |
+
+None of these are encrypted, and all are readable by any other script or extension
+running on the page — which is precisely what the warning says aloud. The actual
+safe answer is not to need a client-side key at all: use the **server plugin**
+route, which reads the key from SillyTavern's store on the server side.
+
+The extension never logs the key, and never writes it to the settings SillyTavern
+persists. Both properties are asserted in the browser test suite, including a check
+that the key is absent from `settings.json` on disk.
+
 ### Forcing a route
 
 The **Route:** dropdown in the panel overrides the automatic choice: `auto`
@@ -160,21 +192,24 @@ server, not in the page. The API key field is also cleared after connecting, whi
 is why it looks empty even though generation works (SillyTavern's own requests are
 made server-side, and read the key there).
 
-**Two ways forward:**
+**Three ways forward:**
 
 1. **Use the server plugin route (recommended).** It reads the key from
    SillyTavern's own store on the server, exactly the way SillyTavern's chat
    completion request does — which is why generation works today. Set
-   **Route: server plugin**, or leave it on `auto`.
+   **Route: server plugin**, or leave it on `auto`. No key is needed in the browser
+   at all.
 
-2. **If you specifically want the CORS proxy route** (for example, to test it):
-   paste the key into the Custom endpoint's API key field and press **Refresh**
-   without clicking Connect, so the value is still in the page. The browser then
-   has something to send and the route authenticates normally. This is covered by
-   the test suite.
+2. **Type the key into the panel's own field.** The **llama.cpp API key** section
+   keeps it in this browser only, so browser-side routes can authenticate. See
+   [The API key field](#the-api-key-field) — it is unencrypted, and the UI says so.
+
+3. **Paste the key into SillyTavern's own API key field** and press **Refresh**
+   without clicking Connect, so the value is still in the page. (`resolveApiKey`
+   falls back to that field, so this works too.)
 
 Setting `allowKeysExposure: true` would also put keys in reach of the browser, but
-it exposes *every* stored secret, so it is not the recommended route.
+it exposes *every* stored secret — prefer option 1 or 2.
 
 The extension states this in the panel when it sees a rejected request, instead of
 reporting a bare status code.

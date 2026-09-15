@@ -31,12 +31,15 @@ import {
     transportUrl,
     transportLabel,
     describeFailure,
+    pickApiKey,
+    resolveApiKey,
     AUTH_HINT,
 } from './params.js';
 
 const MODULE = 'st_llamacpp_samplers';
 const PANEL_ID = 'llamasampler_panel';
 const LOG = '[llamacpp-samplers]';
+const API_KEY_STORAGE = 'st-llamacpp-samplers:apiKey';
 const DETECT_TIMEOUT_MS = 5000;
 const REPROBE_DEBOUNCE_MS = 750;
 const DEFAULT_EXTENSION_PATH = 'third-party/llama-cpp-samplers';
@@ -130,10 +133,47 @@ function ensureRow(key) {
     return settings.rows[key];
 }
 
-/** The Custom endpoint API key, as typed into the connection panel. */
-function getCustomApiKey() {
+/** The Custom endpoint API key SillyTavern keeps, if the browser can see it. */
+function getSillyTavernApiKey() {
     const input = document.getElementById('api_key_custom');
     return input && typeof input.value === 'string' ? input.value.trim() : '';
+}
+
+/**
+ * The key to send upstream: the extension's own field wins, then SillyTavern's.
+ * @see resolveApiKey
+ */
+function getApiKey() {
+    return resolveApiKey(jQuery('#llamasampler_api_key').val(), getSillyTavernApiKey());
+}
+
+/* ----------------------------------------------------------- key storage -- */
+
+/**
+ * The API key lives in localStorage, deliberately:
+ *  - it never reaches SillyTavern's settings, so it is not synced to the server
+ *    or tied to the account;
+ *  - unlike a cookie it is not attached to every request to the SillyTavern
+ *    origin, which would leak it into server logs and proxies for no reason.
+ * It is not encrypted, so the UI says so plainly.
+ */
+function readStoredApiKey() {
+    try {
+        return localStorage.getItem(API_KEY_STORAGE) || '';
+    } catch {
+        return '';
+    }
+}
+
+function writeStoredApiKey(value) {
+    const key = String(value || '').trim();
+    try {
+        if (key) localStorage.setItem(API_KEY_STORAGE, key);
+        else localStorage.removeItem(API_KEY_STORAGE);
+    } catch (error) {
+        warn('could not persist the API key in this browser:', error?.message);
+        toastr.warning('This browser refused to store the key; it will be forgotten on reload.', 'llama.cpp samplers');
+    }
 }
 
 /** Everything /props reported, plus anything already configured by the user. */
@@ -244,7 +284,7 @@ function describeAttempt(transport, failure) {
  */
 async function fetchProps(baseUrl) {
     const settings = state();
-    const apiKey = getCustomApiKey();
+    const apiKey = getApiKey();
 
     const order = settings.forcedTransport && settings.forcedTransport !== 'auto'
         ? [settings.forcedTransport]
@@ -613,6 +653,28 @@ function bindEvents() {
 
     $panel.on('click', '.llamasampler-refresh', () => probeServer());
 
+    // The key is kept in localStorage only; it is never written to the settings
+    // SillyTavern syncs, and it is never logged.
+    $panel.on('input', '#llamasampler_api_key', function () {
+        writeStoredApiKey(jQuery(this).val());
+    });
+
+    // Re-probe once the user has finished editing, not on every keystroke.
+    $panel.on('change', '#llamasampler_api_key', () => probeServer({ quiet: true }));
+
+    $panel.on('click', '.llamasampler-key-clear', () => {
+        jQuery('#llamasampler_api_key').val('');
+        writeStoredApiKey('');
+        probeServer({ quiet: true });
+    });
+
+    $panel.on('click', '.llamasampler-key-reveal', function () {
+        const $input = jQuery('#llamasampler_api_key');
+        const hidden = $input.attr('type') === 'password';
+        $input.attr('type', hidden ? 'text' : 'password');
+        jQuery(this).find('i').toggleClass('fa-eye', !hidden).toggleClass('fa-eye-slash', hidden);
+    });
+
     $panel.on('change', '#llamasampler_transport', function () {
         const settings = state();
         const value = String(jQuery(this).val());
@@ -670,6 +732,7 @@ function restoreUiState() {
     jQuery('#llamasampler_cli').val(settings.cliText || '');
     jQuery('#llamasampler_cli_box').toggle(!!settings.cliOpen);
     jQuery('#llamasampler_transport').val(settings.forcedTransport || 'auto');
+    jQuery('#llamasampler_api_key').val(readStoredApiKey());
 }
 
 async function mountAndWire() {

@@ -105,11 +105,18 @@ try {
         dataSource: document.querySelector('#llamasampler_panel')?.getAttribute('data-source') || null,
         hasCliBox: !!document.querySelector('#llamasampler_cli'),
         hasPreview: !!document.querySelector('#llamasampler_preview'),
+        keyInputType: document.querySelector('#llamasampler_api_key')?.getAttribute('type') || null,
+        warning: document.querySelector('#llamasampler_panel .llamasampler-warning')?.textContent || '',
     })`));
     check('panel sits directly after the Top P slider', () => assert.equal(mountInfo.afterTopP, 'llamasampler_panel'));
     check('panel is gated to the custom source', () => assert.equal(mountInfo.dataSource, 'custom'));
     check('panel exposes the CLI import and preview controls', () => {
         assert.ok(mountInfo.hasCliBox && mountInfo.hasPreview);
+    });
+    check('panel offers an API key field, kept out of SillyTavern settings', () => {
+        assert.equal(mountInfo.keyInputType, 'password', 'the key field should be masked');
+        assert.ok(mountInfo.warning.includes('localStorage'), mountInfo.warning);
+        assert.ok(/unencrypted/i.test(mountInfo.warning), mountInfo.warning);
     });
 
     /* ------------------------------------------- 2. select custom + probe -- */
@@ -184,24 +191,41 @@ try {
                 assert.ok(viaProxy.status.includes('--api-key') || viaProxy.status.includes('API key field'), viaProxy.status);
             });
 
-            // Putting the key in the field is what makes a browser-side route able to
-            // authenticate at all; SillyTavern will not hand a saved key to the page.
-            const typedKey = JSON.parse(await page.evaluate(`(async () => {
-                $('#api_key_custom').val(${JSON.stringify(process.env.MOCK_API_KEY)}).trigger('input').trigger('change');
+            // The extension's own field is the browser-local option: it must work,
+            // and it must stay out of the settings SillyTavern stores server-side.
+            const ownKey = JSON.parse(await page.evaluate(`(async () => {
                 $('#llamasampler_transport').val('corsProxy').trigger('change');
-                await new Promise(r => setTimeout(r, 3000));
-                const result = {
+                $('#llamasampler_api_key').val(${JSON.stringify(process.env.MOCK_API_KEY)}).trigger('input').trigger('change');
+                await new Promise(r => setTimeout(r, 3500));
+                return JSON.stringify({
                     status: document.querySelector('#llamasampler_panel .llamasampler-status').innerText,
                     topK: document.querySelector('#llamasampler_panel .llamasampler-number[data-key="top_k"]')?.value,
-                };
-                $('#api_key_custom').val('').trigger('input').trigger('change');
-                return JSON.stringify(result);
+                    stored: localStorage.getItem('st-llamacpp-samplers:apiKey'),
+                    leaked: JSON.stringify(SillyTavern.getContext().extensionSettings)
+                        .includes(${JSON.stringify(process.env.MOCK_API_KEY)}),
+                });
             })()`));
 
-            check('a key in the API key field lets the CORS proxy route authenticate', () => {
-                assert.ok(typedKey.status.includes('llama.cpp detected'), typedKey.status);
-                assert.equal(typedKey.topK, '64');
+            check('a key typed into the extension field lets the CORS proxy route authenticate', () => {
+                assert.ok(ownKey.status.includes('llama.cpp detected'), ownKey.status);
+                assert.equal(ownKey.topK, '64');
             });
+
+            check('the key lands in browser storage, not in SillyTavern extension settings', () => {
+                assert.equal(ownKey.stored, process.env.MOCK_API_KEY);
+                assert.equal(ownKey.leaked, false, 'the key must never be written to extensionSettings');
+            });
+
+            const settingsPath = process.env.ST_SETTINGS || '/tmp/st-test/data/default-user/settings.json';
+            if (fs.existsSync(settingsPath)) {
+                check('the key never reaches SillyTavern settings on disk', () => {
+                    const contents = fs.readFileSync(settingsPath, 'utf8');
+                    assert.ok(!contents.includes(process.env.MOCK_API_KEY), `${settingsPath} contains the API key`);
+                });
+            }
+
+            // Leave the browser clean for the rest of the run.
+            await page.evaluate(`$('#llamasampler_api_key').val('').trigger('input')`);
         } else {
             check('forcing the CORS proxy route also reaches llama.cpp through SillyTavern', () => {
                 assert.ok(viaProxy.status.includes('llama.cpp detected'), viaProxy.status);

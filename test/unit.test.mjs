@@ -27,6 +27,7 @@ import {
     resolvePropsTarget,
     describeFailure,
     pickApiKey,
+    resolveApiKey,
     tokenize,
 } from '../params.js';
 
@@ -389,6 +390,16 @@ test('pickApiKey: a client-supplied key wins, otherwise the stored one is used',
     assert.equal(pickApiKey('', 'stored'), 'Bearer stored');
     assert.equal(pickApiKey(undefined, undefined), '');
     assert.equal(pickApiKey(undefined, ''), '');
+});
+
+test('resolveApiKey: the extension field wins, then SillyTavern\'s, with trimming', () => {
+    assert.equal(resolveApiKey('mine', 'theirs'), 'mine');
+    assert.equal(resolveApiKey('  mine  ', 'theirs'), 'mine');
+    assert.equal(resolveApiKey('', 'theirs'), 'theirs');
+    assert.equal(resolveApiKey('   ', 'theirs'), 'theirs');
+    assert.equal(resolveApiKey(undefined, '  theirs  '), 'theirs');
+    assert.equal(resolveApiKey(undefined, undefined), '');
+    assert.equal(resolveApiKey(null, null), '');
 });
 
 /* ------------------------------------------------------- error reporting -- */

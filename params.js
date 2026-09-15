@@ -797,6 +797,24 @@ export const AUTH_HINT = ' llama.cpp rejected the request (SillyTavern reports i
     + 'which reads the saved key server-side.';
 
 /**
+ * Choose the API key the extension should send upstream for `/props`.
+ *
+ * The extension's own field wins, because it is an explicit, browser-local choice
+ * the user typed for this purpose. Otherwise fall back to whatever is in
+ * SillyTavern's own API key field - which is usually empty, since SillyTavern
+ * clears it after connecting and never hands the browser a key it has saved.
+ *
+ * @param {string} [extensionKey] Key from the extension's own field.
+ * @param {string} [sillyTavernKey] Key from SillyTavern's Custom endpoint field.
+ * @returns {string} Bare key, or '' for none.
+ */
+export function resolveApiKey(extensionKey, sillyTavernKey) {
+    const own = String(extensionKey ?? '').trim();
+    if (own) return own;
+    return String(sillyTavernKey ?? '').trim();
+}
+
+/**
  * Decide which Authorization header to send upstream for `/props`.
  *
  * A header supplied by the caller wins. Otherwise fall back to the key
