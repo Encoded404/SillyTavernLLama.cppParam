@@ -176,10 +176,19 @@ try {
     })()`));
 
     if (viaProxy.status.includes('CORS proxy')) {
-        check('forcing the CORS proxy route also reaches llama.cpp through SillyTavern', () => {
-            assert.ok(viaProxy.status.includes('llama.cpp detected'), viaProxy.status);
-            assert.equal(viaProxy.topK, '64');
-        });
+        if (process.env.MOCK_API_KEY) {
+            // The mock requires an API key and SillyTavern hides the saved one from
+            // the browser, so this route must fail with advice rather than a bare 400.
+            check('a rejected CORS proxy request explains the --api-key cause', () => {
+                assert.ok(viaProxy.status.includes('refused the request'), viaProxy.status);
+                assert.ok(viaProxy.status.includes('--api-key'), viaProxy.status);
+            });
+        } else {
+            check('forcing the CORS proxy route also reaches llama.cpp through SillyTavern', () => {
+                assert.ok(viaProxy.status.includes('llama.cpp detected'), viaProxy.status);
+                assert.equal(viaProxy.topK, '64');
+            });
+        }
     } else {
         console.log('  skip CORS proxy route (enableCorsProxy is false in this SillyTavern)');
     }

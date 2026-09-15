@@ -25,6 +25,8 @@ import {
     transportOrderFor,
     transportUrl,
     resolvePropsTarget,
+    describeFailure,
+    pickApiKey,
     tokenize,
 } from '../params.js';
 
@@ -379,4 +381,51 @@ test('propsUrlFromBase: keeps a reverse-proxy path prefix and never doubles /pro
     assert.equal(propsUrlFromBase('http://gw/llama/v1'), 'http://gw/llama/props');
     assert.equal(propsUrlFromBase('http://host:8080/props'), 'http://host:8080/props');
     assert.equal(propsUrlFromBase('http://host:8080/props/props'), 'http://host:8080/props/props');
+});
+
+test('pickApiKey: a client-supplied key wins, otherwise the stored one is used', () => {
+    assert.equal(pickApiKey('Bearer from-client', 'stored'), 'Bearer from-client');
+    assert.equal(pickApiKey(undefined, 'stored'), 'Bearer stored');
+    assert.equal(pickApiKey('', 'stored'), 'Bearer stored');
+    assert.equal(pickApiKey(undefined, undefined), '');
+    assert.equal(pickApiKey(undefined, ''), '');
+});
+
+/* ------------------------------------------------------- error reporting -- */
+
+const fakeResponse = (status, statusText, body) => ({ status, statusText, text: async () => body });
+
+test('describeFailure: flags a 401 and includes llama.cpp\'s message', async () => {
+    const failure = await describeFailure(fakeResponse(401, 'Unauthorized', '{"error":{"message":"Invalid API Key"}}'));
+    assert.equal(failure.unauthorized, true);
+    assert.match(failure.text, /401 Unauthorized/);
+    assert.match(failure.text, /Invalid API Key/);
+});
+
+test('describeFailure: treats the proxy\'s 400 "Unauthorized" artifact as an auth failure', async () => {
+    // SillyTavern rewrites an upstream 401 to 400 but keeps the status text.
+    const failure = await describeFailure(fakeResponse(400, 'Unauthorized', 'Invalid API Key'));
+    assert.equal(failure.unauthorized, true);
+    assert.match(failure.text, /400 Unauthorized/);
+});
+
+test('describeFailure: surfaces the server plugin\'s error payload', async () => {
+    const body = JSON.stringify({ error: 'Upstream responded 401 for http://127.0.0.1:8080/props', unauthorized: true });
+    const failure = await describeFailure(fakeResponse(502, 'Bad Gateway', body));
+    assert.equal(failure.unauthorized, true);
+    assert.match(failure.text, /Upstream responded 401/);
+});
+
+test('describeFailure: a plain failure is not reported as auth', async () => {
+    const failure = await describeFailure(fakeResponse(404, 'Not Found', ''));
+    assert.equal(failure.unauthorized, false);
+    assert.equal(failure.text, '404 Not Found');
+});
+
+test('describeFailure: tolerates an unreadable body and truncates a huge one', async () => {
+    const noBody = await describeFailure({ status: 500, statusText: 'Internal Server Error' });
+    assert.equal(noBody.text, '500 Internal Server Error');
+
+    const huge = await describeFailure(fakeResponse(500, 'ERR', 'x'.repeat(5000)));
+    assert.ok(huge.text.length < 300, `expected truncation, got ${huge.text.length} chars`);
 });

@@ -789,3 +789,70 @@ export function transportLabel(transport) {
         default: return transport;
     }
 }
+
+/** Advice for the most common cause of a refused request. */
+export const AUTH_HINT = ' The server refused the request, which usually means llama.cpp is running with '
+    + '--api-key. Put the same key in this endpoint\'s API key field. The server plugin route can use it '
+    + 'even when SillyTavern hides the saved key from the browser.';
+
+/**
+ * Decide which Authorization header to send upstream for `/props`.
+ *
+ * A header supplied by the caller wins. Otherwise fall back to the key
+ * SillyTavern has stored for its Custom endpoint - which the browser usually
+ * cannot read, because SillyTavern hides saved keys unless `allowKeysExposure`
+ * is enabled. This is why the server plugin can succeed where a browser fetch
+ * cannot: it reads the secret on the server side.
+ *
+ * @param {string} [clientAuthorization] Header the caller supplied, if any.
+ * @param {string} [storedKey] Bare key from SillyTavern's secret store.
+ * @returns {string} Authorization header value, or '' for none.
+ */
+export function pickApiKey(clientAuthorization, storedKey) {
+    if (clientAuthorization) return String(clientAuthorization);
+    return storedKey ? `Bearer ${storedKey}` : '';
+}
+
+/**
+ * Describe a failed HTTP response in a way a human can act on.
+ *
+ * SillyTavern's proxy turns an upstream 401 into a 400 while keeping the status
+ * text "Unauthorized" (forwardFetchResponse in src/util.js), so the status code
+ * alone is misleading and the status text has to be considered too.
+ *
+ * @param {{status: number, statusText?: string, text?: () => Promise<string>}} response
+ * @returns {Promise<{unauthorized: boolean, text: string}>}
+ */
+export async function describeFailure(response) {
+    const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+
+    let unauthorized = response.status === 401
+        || response.status === 403
+        || (response.status === 400 && /unauthorized/i.test(response.statusText || ''));
+
+    let detail = '';
+
+    if (typeof response.text === 'function') {
+        try {
+            const raw = (await response.text() || '').trim();
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (parsed?.unauthorized) unauthorized = true;
+                    const error = parsed?.error;
+                    detail = (error && typeof error === 'object' ? error.message : error) || parsed?.message || '';
+                } catch {
+                    detail = raw;
+                }
+                if (!detail) detail = raw;
+            }
+        } catch {
+            // Body already consumed or unreadable; the status alone will do.
+        }
+    }
+
+    return {
+        unauthorized,
+        text: detail ? `${status}: ${String(detail).slice(0, 200)}` : status,
+    };
+}

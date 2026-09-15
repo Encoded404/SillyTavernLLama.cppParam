@@ -22,11 +22,50 @@
  *
  * Note: server plugins are not sandboxed. Only run plugins you trust.
  */
-import { PLUGIN_ID, resolvePropsTarget } from './params.js';
+import { PLUGIN_ID, pickApiKey, resolvePropsTarget } from './params.js';
 
+const LOG = '[llamacpp-samplers]';
 const TIMEOUT_MS = 5000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_URL_LENGTH = 2048;
+
+/**
+ * SillyTavern's own secret store, so this plugin can use the same Custom endpoint
+ * API key the server already uses for chat completions. That matters because
+ * SillyTavern hides saved keys from the browser unless `allowKeysExposure` is on,
+ * so the client often cannot supply one.
+ */
+const SECRETS_MODULE = new URL('../../src/endpoints/secrets.js', import.meta.url).href;
+
+let secrets = null;
+let secretsLoaded = false;
+
+async function loadSecrets() {
+    if (secretsLoaded) return secrets;
+    secretsLoaded = true;
+
+    try {
+        secrets = await import(SECRETS_MODULE);
+    } catch (error) {
+        secrets = null;
+        console.warn(`${LOG} could not load SillyTavern's secrets module; an API key would have to come from the client:`, error?.message);
+    }
+
+    return secrets;
+}
+
+/** The Custom endpoint API key saved in SillyTavern, or '' if there is none. */
+function readStoredApiKey(request) {
+    const directories = request.user?.directories;
+    if (!secrets || !directories) return '';
+
+    try {
+        return secrets.readSecret(directories, secrets.SECRET_KEYS.CUSTOM) || '';
+    } catch (error) {
+        console.warn(`${LOG} could not read the stored Custom endpoint API key:`, error?.message);
+        return '';
+    }
+}
 
 export const info = {
     id: PLUGIN_ID,
@@ -56,6 +95,8 @@ function validateTarget(raw) {
 }
 
 export async function init(router) {
+    await loadSecrets();
+
     router.get('/props', async (request, response) => {
         const raw = request.query.url;
 
@@ -74,8 +115,9 @@ export async function init(router) {
         try {
             const headers = { accept: 'application/json' };
 
-            // Pass through the llama.cpp API key the user configured in SillyTavern.
-            const authorization = request.get('authorization');
+            // Prefer the key the client sent; fall back to the one SillyTavern has
+            // stored for its own Custom endpoint, which the browser cannot read.
+            const authorization = pickApiKey(request.get('authorization'), readStoredApiKey(request));
             if (authorization) headers.authorization = authorization;
 
             const upstream = await fetch(target, { headers, signal: controller.signal });
@@ -88,7 +130,8 @@ export async function init(router) {
             if (!upstream.ok) {
                 return response.status(502).json({
                     error: `Upstream responded ${upstream.status} for ${target}`,
-                    detail: body.slice(0, 200),
+                    detail: body.slice(0, 300),
+                    unauthorized: upstream.status === 401 || upstream.status === 403,
                 });
             }
 

@@ -50,7 +50,9 @@ through `custom_include_body`, but there is no UI for it. This extension is that
   `--cors-origins 'http://localhost:8000'`). See
   [Networking](#networking-when-llamacpp-is-not-reachable-from-the-browser).
 - If llama.cpp runs with `--api-key`, put the same key in SillyTavern's Custom
-  endpoint API key field; the extension forwards it.
+  endpoint API key field. Prefer the server plugin route in that case: SillyTavern
+  hides saved keys from the browser, so server-side routes are the reliable ones.
+  See [Troubleshooting](#not-detected--http-400-unauthorized).
 
 ## Networking: when llama.cpp is not reachable from the browser
 
@@ -125,6 +127,40 @@ reports which route actually worked, which makes misconfiguration obvious:
 ```
 llama.cpp detected via SillyTavern server plugin  b6011 · my-model · Q4_K_M · n_ctx 8192
 ```
+
+## Troubleshooting
+
+### "Not detected … HTTP 400 Unauthorized"
+
+llama.cpp is running with `--api-key`, and the request arrived without the key.
+
+The 400 is a red herring: SillyTavern turns an upstream **401** into a **400** while
+keeping the status text `Unauthorized` (`forwardFetchResponse` in `src/util.js`), so
+"400 Unauthorized" really means "llama.cpp said 401". You can confirm it:
+
+```bash
+curl -i 'http://127.0.0.1:8080/props'
+# 401 + {"error":{"code":401,"message":"Invalid API Key",...}}
+```
+
+**Fix:** put the same key in the Custom endpoint's API key field, then use the
+**server plugin** route. The plugin reads the key from SillyTavern's own secret
+store on the server side, which matters because SillyTavern hides saved keys from
+the browser unless `allowKeysExposure` is enabled — so a browser-side route
+(`direct`, `CORS proxy`) often has no way to send the key at all, even after you
+save it.
+
+The extension tells you this directly when it sees a rejected request, rather than
+just reporting a bare status code.
+
+### Everything else
+
+| Symptom | Likely cause |
+| --- | --- |
+| `direct from browser: no response in 5000ms` | llama.cpp is not reachable from the machine you are browsing from — use a server-side route |
+| `…: not a llama.cpp /props response` | the URL points at something that is not llama.cpp (vLLM, Ollama, LM Studio, real OpenAI) |
+| `Unable to resolve host` / connection refused on the plugin route | llama.cpp is not listening where the *server* expects; check the host and port from the server's point of view |
+| Rows appear but are all off | expected — nothing is sent until you enable a row |
 
 ## Installation
 
@@ -279,6 +315,21 @@ node test/e2e-browser.mjs       # also needs Chrome with --remote-debugging-port
 To exercise both server-side routes, the SillyTavern under test needs
 `enableServerPlugins: true` (with the plugin installed) and `enableCorsProxy: true`.
 The CORS proxy check skips itself when the proxy is off, rather than failing.
+
+To reproduce a `--api-key` protected llama.cpp, start the mock with a key and store
+the same key in SillyTavern:
+
+```bash
+API_KEY=test-key node test/mock-llamacpp.mjs
+# then, with the CSRF token from GET /csrf-token:
+curl -b cookies -H "X-CSRF-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"key":"api_key_custom","value":"test-key"}' http://127.0.0.1:8000/api/secrets/write
+
+MOCK_API_KEY=test-key node test/e2e-browser.mjs
+```
+
+With a key in play, the browser-only routes are expected to fail and the plugin
+route to succeed — which is what the suite asserts.
 
 The plugin endpoint is also exercised directly, including its rejections:
 

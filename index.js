@@ -30,6 +30,8 @@ import {
     transportOrderFor,
     transportUrl,
     transportLabel,
+    describeFailure,
+    AUTH_HINT,
 } from './params.js';
 
 const MODULE = 'st_llamacpp_samplers';
@@ -205,17 +207,18 @@ async function fetchWithTimeout(url, options, timeoutMs = DETECT_TIMEOUT_MS) {
 
 /** Headers for one transport. */
 function transportOptions(transport, apiKey) {
-    switch (transport) {
-        // Same-origin call to SillyTavern, so it needs the usual request headers.
-        case 'plugin':
-            return { headers: ctx().getRequestHeaders() };
-        // llama.cpp may be behind --api-key.
-        case 'direct':
-            return { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} };
-        // /proxy/ strips our credentials anyway.
-        default:
-            return { headers: {} };
+    // llama.cpp may be started with --api-key. SillyTavern's /proxy/ forwards the
+    // Authorization header it is given, and the server plugin either forwards it
+    // or supplies the key from SillyTavern's own secret store.
+    const auth = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+
+    // The plugin route is a same-origin call to SillyTavern, so it needs the
+    // usual request headers on top.
+    if (transport === 'plugin') {
+        return { headers: { ...ctx().getRequestHeaders(), ...auth } };
     }
+
+    return { headers: { ...auth } };
 }
 
 /**
@@ -226,7 +229,7 @@ function transportOptions(transport, apiKey) {
  * loaded from somewhere else, llama.cpp is next to the SillyTavern *server*, so
  * the lookup has to happen there.
  *
- * @returns {Promise<{payload: object|null, transport: string, attempts: string[]}>}
+ * @returns {Promise<{payload: object|null, transport: string, attempts: string[], unauthorized: boolean}>}
  */
 async function fetchProps(baseUrl) {
     const settings = state();
@@ -237,6 +240,7 @@ async function fetchProps(baseUrl) {
         : transportOrderFor(baseUrl, location.hostname, settings.transport);
 
     const attempts = [];
+    let unauthorized = false;
 
     for (const transport of order) {
         try {
@@ -246,7 +250,9 @@ async function fetchProps(baseUrl) {
             );
 
             if (!response.ok) {
-                attempts.push(`${transportLabel(transport)}: HTTP ${response.status}`);
+                const failure = await describeFailure(response);
+                unauthorized = unauthorized || failure.unauthorized;
+                attempts.push(`${transportLabel(transport)}: ${failure.text}`);
                 continue;
             }
 
@@ -257,14 +263,14 @@ async function fetchProps(baseUrl) {
             }
 
             if (settings.transport !== transport) log(`reaching /props via ${transportLabel(transport)}`);
-            return { payload, transport, attempts };
+            return { payload, transport, attempts, unauthorized: false };
         } catch (error) {
             const reason = error?.name === 'AbortError' ? `no response in ${DETECT_TIMEOUT_MS}ms` : (error?.message || String(error));
             attempts.push(`${transportLabel(transport)}: ${reason}`);
         }
     }
 
-    return { payload: null, transport: '', attempts };
+    return { payload: null, transport: '', attempts, unauthorized };
 }
 
 /** A short, actionable hint when every route failed. */
@@ -297,7 +303,7 @@ async function probeServer({ quiet = false } = {}) {
         return;
     }
 
-    const { payload, transport, attempts } = await fetchProps(baseUrl);
+    const { payload, transport, attempts, unauthorized } = await fetchProps(baseUrl);
 
     if (payload) {
         const params = payload.default_generation_settings.params;
@@ -330,7 +336,7 @@ async function probeServer({ quiet = false } = {}) {
         settings.detected = false;
         settings.transport = '';
         settings.probedUrl = propsUrlFromBase(baseUrl);
-        settings.lastError = attempts.join('; ') + routingHint(baseUrl);
+        settings.lastError = attempts.join('; ') + routingHint(baseUrl) + (unauthorized ? AUTH_HINT : '');
         if (!quiet) toastr.error(attempts[0] || 'Could not reach llama.cpp', 'llama.cpp samplers');
         warn('probe failed:', attempts);
     }

@@ -9,6 +9,8 @@
  * Env:
  *   PORT         listen port (default 8989)
  *   RECORD_FILE  where to write the last received request (default test/received.json)
+ *   API_KEY      when set, every route requires `Authorization: Bearer <value>`
+ *                and answers 401 otherwise (mimics llama-server --api-key)
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -20,6 +22,7 @@ const propsFixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures',
 
 const port = Number(process.env.PORT || 8989);
 const recordFile = process.env.RECORD_FILE || path.join(__dirname, 'received.json');
+const apiKey = process.env.API_KEY || '';
 
 function cors(res) {
     // llama.cpp defaults to --cors-origins '*'
@@ -41,6 +44,12 @@ const server = http.createServer((req, res) => {
         cors(res);
         res.writeHead(204);
         res.end();
+        return;
+    }
+
+    // Mimic llama-server --api-key: everything but preflight needs the key.
+    if (apiKey && req.headers.authorization !== `Bearer ${apiKey}`) {
+        json(res, { error: { code: 401, message: 'Invalid API Key', type: 'authentication_error' } }, 401);
         return;
     }
 

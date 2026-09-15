@@ -4,7 +4,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Encoded",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "homePage": "https://github.com/Encoded404/SillyTavernLLama.cppParam",
     "auto_update": true,
     "minimum_client_version": "1.18.0",
