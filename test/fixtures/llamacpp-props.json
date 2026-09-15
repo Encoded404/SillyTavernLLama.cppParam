@@ -45,7 +45,7 @@
             "reasoning_in_content": false,
             "generation_prompt": "",
             "samplers": ["top_k", "tfs_z", "typical_p", "top_p", "min_p", "xtc", "temperature"],
-            "speculative.types": ["none"],
+            "speculative.types": "none",
             "timings_per_token": false,
             "post_sampling_probs": false,
             "backend_sampling": false,

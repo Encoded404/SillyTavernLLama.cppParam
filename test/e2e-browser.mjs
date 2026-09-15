@@ -180,8 +180,27 @@ try {
             // The mock requires an API key and SillyTavern hides the saved one from
             // the browser, so this route must fail with advice rather than a bare 400.
             check('a rejected CORS proxy request explains the --api-key cause', () => {
-                assert.ok(viaProxy.status.includes('refused the request'), viaProxy.status);
-                assert.ok(viaProxy.status.includes('--api-key'), viaProxy.status);
+                assert.ok(viaProxy.status.includes('rejected the request'), viaProxy.status);
+                assert.ok(viaProxy.status.includes('--api-key') || viaProxy.status.includes('API key field'), viaProxy.status);
+            });
+
+            // Putting the key in the field is what makes a browser-side route able to
+            // authenticate at all; SillyTavern will not hand a saved key to the page.
+            const typedKey = JSON.parse(await page.evaluate(`(async () => {
+                $('#api_key_custom').val(${JSON.stringify(process.env.MOCK_API_KEY)}).trigger('input').trigger('change');
+                $('#llamasampler_transport').val('corsProxy').trigger('change');
+                await new Promise(r => setTimeout(r, 3000));
+                const result = {
+                    status: document.querySelector('#llamasampler_panel .llamasampler-status').innerText,
+                    topK: document.querySelector('#llamasampler_panel .llamasampler-number[data-key="top_k"]')?.value,
+                };
+                $('#api_key_custom').val('').trigger('input').trigger('change');
+                return JSON.stringify(result);
+            })()`));
+
+            check('a key in the API key field lets the CORS proxy route authenticate', () => {
+                assert.ok(typedKey.status.includes('llama.cpp detected'), typedKey.status);
+                assert.equal(typedKey.topK, '64');
             });
         } else {
             check('forcing the CORS proxy route also reaches llama.cpp through SillyTavern', () => {

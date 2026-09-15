@@ -143,15 +143,41 @@ curl -i 'http://127.0.0.1:8080/props'
 # 401 + {"error":{"code":401,"message":"Invalid API Key",...}}
 ```
 
-**Fix:** put the same key in the Custom endpoint's API key field, then use the
-**server plugin** route. The plugin reads the key from SillyTavern's own secret
-store on the server side, which matters because SillyTavern hides saved keys from
-the browser unless `allowKeysExposure` is enabled — so a browser-side route
-(`direct`, `CORS proxy`) often has no way to send the key at all, even after you
-save it.
+**What is happening.** llama.cpp is running with `--api-key`, and the request
+reached it without the key. Routing was fine — this is purely authentication.
 
-The extension tells you this directly when it sees a rejected request, rather than
-just reporting a bare status code.
+**Why the browser-side routes cannot fix this themselves.** SillyTavern
+deliberately never hands a saved key to the browser:
+
+- `secret_state` (what the frontend gets from `/api/secrets/read`) is a map of
+  booleans, not values.
+- `/api/secrets/view` and `/api/secrets/find` both answer **403** unless
+  `allowKeysExposure: true`.
+
+So `direct` and `CORS proxy` can only send a key that is physically present in the
+API key field *at the time you press Refresh* — a key you saved earlier is on the
+server, not in the page. The API key field is also cleared after connecting, which
+is why it looks empty even though generation works (SillyTavern's own requests are
+made server-side, and read the key there).
+
+**Two ways forward:**
+
+1. **Use the server plugin route (recommended).** It reads the key from
+   SillyTavern's own store on the server, exactly the way SillyTavern's chat
+   completion request does — which is why generation works today. Set
+   **Route: server plugin**, or leave it on `auto`.
+
+2. **If you specifically want the CORS proxy route** (for example, to test it):
+   paste the key into the Custom endpoint's API key field and press **Refresh**
+   without clicking Connect, so the value is still in the page. The browser then
+   has something to send and the route authenticates normally. This is covered by
+   the test suite.
+
+Setting `allowKeysExposure: true` would also put keys in reach of the browser, but
+it exposes *every* stored secret, so it is not the recommended route.
+
+The extension states this in the panel when it sees a rejected request, instead of
+reporting a bare status code.
 
 ### "Route is pinned to …"
 
@@ -347,8 +373,9 @@ curl -b cookies -H "X-CSRF-Token: $TOKEN" -H 'Content-Type: application/json' \
 MOCK_API_KEY=test-key node test/e2e-browser.mjs
 ```
 
-With a key in play, the browser-only routes are expected to fail and the plugin
-route to succeed — which is what the suite asserts.
+With a key in play, the browser-only routes are expected to fail with advice, and
+the plugin route to succeed — both of which the suite asserts, along with the fact
+that pasting the key into the API key field makes the CORS proxy route work.
 
 The plugin endpoint is also exercised directly, including its rejections:
 

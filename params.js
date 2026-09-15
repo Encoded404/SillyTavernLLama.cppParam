@@ -201,8 +201,8 @@ export const PARAM_METADATA = {
         desc: 'Generation prompt appended for reasoning models',
     },
     'speculative.types': {
-        type: 'stringArray', group: 'pipeline', advanced: true,
-        desc: 'Speculative decoding methods enabled on the server',
+        type: 'string', group: 'pipeline', advanced: true,
+        desc: 'Speculative decoding methods enabled on the server (a name, not an array)',
     },
     timings_per_token: {
         type: 'bool', group: 'pipeline', advanced: true,
@@ -791,9 +791,10 @@ export function transportLabel(transport) {
 }
 
 /** Advice for the most common cause of a refused request. */
-export const AUTH_HINT = ' The server refused the request, which usually means llama.cpp is running with '
-    + '--api-key. Put the same key in this endpoint\'s API key field. The server plugin route can use it '
-    + 'even when SillyTavern hides the saved key from the browser.';
+export const AUTH_HINT = ' llama.cpp rejected the request (SillyTavern reports its 401 as a 400). The browser-side '
+    + 'routes can only send a key that is actually in the API key field - SillyTavern never gives the browser a key '
+    + 'it has saved on the server. Either paste the key into the API key field, or use the "server plugin" route, '
+    + 'which reads the saved key server-side.';
 
 /**
  * Decide which Authorization header to send upstream for `/props`.
