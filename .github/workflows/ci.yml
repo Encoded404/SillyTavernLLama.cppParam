@@ -32,13 +32,28 @@ jobs:
             console.log('manifest ok:', m.display_name, m.version);
           "
 
-      - name: Syntax check extension entry points
+      - name: Syntax check entry points
         run: |
           node --check index.js
           node --check params.js
+          node --check server-plugin.mjs
+          node --check install.mjs
 
       - name: Check the extension payload is complete
         run: |
           for f in manifest.json index.js params.js style.css settings.html; do
-            test -f "$f" || { echo "missing $f"; exit 1; }
+            test -f "$f" || { echo "missing extension file: $f"; exit 1; }
           done
+
+      - name: Check the plugin payload is complete
+        run: |
+          for f in package.json server-plugin.mjs params.js; do
+            test -f "$f" || { echo "missing plugin file: $f"; exit 1; }
+          done
+          # The plugin loader reads package.json "main", so it must point at the plugin.
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            if (m.main !== 'server-plugin.mjs') throw new Error('package.json main must be server-plugin.mjs, got ' + m.main);
+            console.log('plugin entry ok:', m.main);
+          "

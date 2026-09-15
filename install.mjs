@@ -21,6 +21,13 @@ const DEFAULT_NAME = 'llama-cpp-samplers';
 /** Extension payload: everything else in the repo is development tooling. */
 const EXTENSION_FILES = ['manifest.json', 'index.js', 'params.js', 'style.css', 'settings.html'];
 
+/**
+ * The optional server plugin. package.json carries the `main` field SillyTavern's
+ * plugin loader looks for, so server-plugin.mjs is picked up instead of the
+ * browser entry point that also lives in this repo.
+ */
+const PLUGIN_FILES = ['package.json', 'server-plugin.mjs', 'params.js'];
+
 const ANSI = {
     red: s => `\u001b[31m${s}\u001b[0m`,
     green: s => `\u001b[32m${s}\u001b[0m`,
@@ -35,24 +42,30 @@ function usage(exitCode = 0) {
 Options:
   --dir <path>     SillyTavern checkout or install directory. Required.
   --name <folder>  Destination folder name under third-party/. Default: ${DEFAULT_NAME}
-  --uninstall      Remove the extension instead of installing it.
+  --with-plugin    Also install the optional server plugin, which lets the extension
+                   read llama.cpp's /props when llama.cpp is only reachable from the
+                   SillyTavern server (e.g. it listens on 127.0.0.1 and you browse
+                   from another machine). Requires enableServerPlugins: true.
+  --uninstall      Remove the extension (and the plugin, if present).
   --dry-run        Show what would happen without writing anything.
   -h, --help       Show this help.
 
 Examples:
   node install.mjs --dir ~/SillyTavern
+  node install.mjs --dir ~/SillyTavern --with-plugin
   node install.mjs --dir ~/SillyTavern --uninstall
 `);
     process.exit(exitCode);
 }
 
 function parseArgs(argv) {
-    const args = { name: DEFAULT_NAME, uninstall: false, dryRun: false };
+    const args = { name: DEFAULT_NAME, uninstall: false, dryRun: false, withPlugin: false };
 
     for (let i = 0; i < argv.length; i++) {
         switch (argv[i]) {
             case '--dir': args.dir = argv[++i]; break;
             case '--name': args.name = argv[++i]; break;
+            case '--with-plugin': args.withPlugin = true; break;
             case '--uninstall': args.uninstall = true; break;
             case '--dry-run': args.dryRun = true; break;
             case '-h':
@@ -131,14 +144,22 @@ function main() {
     }
 
     const targetDir = path.join(dir, 'public', 'scripts', 'extensions', 'third-party', args.name);
+    const pluginDir = path.join(dir, 'plugins', args.name);
 
     if (args.uninstall) {
-        if (!fs.existsSync(targetDir)) {
+        if (fs.existsSync(targetDir)) {
+            if (!args.dryRun) fs.rmSync(targetDir, { recursive: true, force: true });
+            console.log(`${args.dryRun ? '[dry-run] would remove' : 'Removed'} ${ANSI.cyan(targetDir)}`);
+        } else {
             console.log(ANSI.yellow(`Nothing to remove: ${targetDir} does not exist.`));
-            return;
         }
-        if (!args.dryRun) fs.rmSync(targetDir, { recursive: true, force: true });
-        console.log(`${args.dryRun ? '[dry-run] would remove' : 'Removed'} ${ANSI.cyan(targetDir)}`);
+
+        // Only touch plugins/<name> if it really is our plugin.
+        if (fs.existsSync(path.join(pluginDir, 'server-plugin.mjs'))) {
+            if (!args.dryRun) fs.rmSync(pluginDir, { recursive: true, force: true });
+            console.log(`${args.dryRun ? '[dry-run] would remove' : 'Removed'} plugin ${ANSI.cyan(pluginDir)}`);
+        }
+
         return;
     }
 
@@ -160,10 +181,22 @@ function main() {
         }
     }
 
+    if (args.withPlugin && !args.dryRun) {
+        fs.mkdirSync(pluginDir, { recursive: true });
+        for (const file of PLUGIN_FILES) {
+            fs.copyFileSync(path.join(__dirname, file), path.join(pluginDir, file));
+        }
+    }
+
     const { profiles, patched } = enableForAllUsers(dir, args.name, args.dryRun);
 
     console.log(`${args.dryRun ? '[dry-run] would install' : 'Installed'} ${ANSI.green(`third-party/${args.name}`)} -> ${ANSI.cyan(targetDir)}`);
     for (const file of EXTENSION_FILES) console.log(`  + ${file}`);
+
+    if (args.withPlugin) {
+        console.log(`${args.dryRun ? '[dry-run] would install' : 'Installed'} plugin ${ANSI.green(`plugins/${args.name}`)} -> ${ANSI.cyan(pluginDir)}`);
+        for (const file of PLUGIN_FILES) console.log(`  + ${file}`);
+    }
 
     if (!profiles.length) {
         console.log(ANSI.yellow('No settings.json found yet (SillyTavern has not run) — the extension will be enabled on first start.'));
@@ -178,11 +211,24 @@ function main() {
 Next steps:
   1. Restart SillyTavern (or reload the page) so the extension is discovered.
   2. Chat Completion -> API: Custom (OpenAI-compatible), URL: http://<host>:<port>/v1
-  3. Open the "llama.cpp samplers" panel, hit Refresh, and enable what you need.
+  3. Open the "llama.cpp samplers" panel, hit Refresh, and enable what you need.`);
 
-Note: /props is read directly by the browser, so llama.cpp must allow the origin.
-      Recent llama.cpp defaults to --cors-origins '*' which is fine. If you locked
-      CORS down, allow SillyTavern's origin instead.`);
+    if (args.withPlugin) {
+        console.log(`
+  The plugin needs one config change: set ${ANSI.yellow('enableServerPlugins: true')} in config.yaml,
+  then restart. The extension will switch to the server-side route automatically
+  whenever the browser cannot reach llama.cpp itself.`);
+    } else {
+        console.log(`
+  If llama.cpp listens on 127.0.0.1 and you browse from another machine, /props
+  must be read by the server instead of the browser: re-run with --with-plugin,
+  or set ${ANSI.yellow('enableCorsProxy: true')} in config.yaml.`);
+    }
+
+    console.log(`
+Note: the direct route reads /props from the browser, so llama.cpp must allow the
+      origin. Recent llama.cpp defaults to --cors-origins '*' which is fine; if you
+      locked CORS down, allow SillyTavern's origin instead.`);
 }
 
 main();

@@ -2,6 +2,14 @@
     <div class="range-block-title" data-i18n="llama.cpp samplers">llama.cpp samplers</div>
     <div class="llamasampler-toolbar">
         <span class="llamasampler-status"></span>
+        <select id="llamasampler_transport" class="text_pole llamasampler-transport"
+            title="How to reach llama.cpp's /props endpoint. Auto picks for you; use a server-side route when llama.cpp is only reachable from the SillyTavern server."
+            data-i18n="[title]How to reach llama.cpp's /props endpoint">
+            <option value="auto" data-i18n="Route: auto">Route: auto</option>
+            <option value="direct" data-i18n="Route: direct">Route: direct</option>
+            <option value="plugin" data-i18n="Route: server plugin">Route: server plugin</option>
+            <option value="corsProxy" data-i18n="Route: CORS proxy">Route: CORS proxy</option>
+        </select>
         <div class="menu_button menu_button_icon llamasampler-refresh"
             title="Re-read parameters from GET /props"
             data-i18n="[title]Re-read parameters from GET /props">

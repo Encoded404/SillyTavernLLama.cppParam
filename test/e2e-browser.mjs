@@ -134,6 +134,59 @@ try {
         assert.ok(status.includes('llama.cpp detected'), status);
         assert.ok(status.includes('test-model'), status);
     });
+    check('the status line names the route that worked', () => {
+        assert.ok(status.includes('via'), status);
+    });
+
+    /* ------------------------------- 2b. server-side route (plugin) -- */
+    // Simulates a browser that cannot reach llama.cpp directly: the lookup has
+    // to be performed by the SillyTavern server instead.
+    const viaPlugin = JSON.parse(await page.evaluate(`(async () => {
+        $('#llamasampler_transport').val('plugin').trigger('change');
+        await new Promise(r => setTimeout(r, 3000));
+        return JSON.stringify({
+            status: document.querySelector('#llamasampler_panel .llamasampler-status').innerText,
+            topK: document.querySelector('#llamasampler_panel .llamasampler-number[data-key="top_k"]')?.value,
+            rows: document.querySelectorAll('#llamasampler_panel .llamasampler-row').length,
+        });
+    })()`));
+
+    check('forcing the plugin route reaches llama.cpp through the SillyTavern server', () => {
+        assert.ok(viaPlugin.status.includes('llama.cpp detected'), viaPlugin.status);
+        assert.ok(viaPlugin.status.includes('SillyTavern server plugin'), viaPlugin.status);
+        assert.equal(viaPlugin.topK, '64');
+        assert.ok(viaPlugin.rows >= 40, `only ${viaPlugin.rows} rows`);
+    });
+
+    // Back to automatic routing for the rest of the run.
+    await page.evaluate(`$('#llamasampler_transport').val('auto').trigger('change')`);
+    await page.waitFor(`document.querySelector('#llamasampler_panel .llamasampler-ok')`, 15000, 'auto routing restored');
+    await new Promise(r => setTimeout(r, 500));
+
+    /* --------------------------- 2c. server-side route (CORS proxy) -- */
+    // Only meaningful when SillyTavern's CORS proxy is switched on
+    // (enableCorsProxy: true in config.yaml), so this is a soft check.
+    const viaProxy = JSON.parse(await page.evaluate(`(async () => {
+        $('#llamasampler_transport').val('corsProxy').trigger('change');
+        await new Promise(r => setTimeout(r, 3000));
+        return JSON.stringify({
+            status: document.querySelector('#llamasampler_panel .llamasampler-status').innerText,
+            topK: document.querySelector('#llamasampler_panel .llamasampler-number[data-key="top_k"]')?.value,
+        });
+    })()`));
+
+    if (viaProxy.status.includes('CORS proxy')) {
+        check('forcing the CORS proxy route also reaches llama.cpp through SillyTavern', () => {
+            assert.ok(viaProxy.status.includes('llama.cpp detected'), viaProxy.status);
+            assert.equal(viaProxy.topK, '64');
+        });
+    } else {
+        console.log('  skip CORS proxy route (enableCorsProxy is false in this SillyTavern)');
+    }
+
+    await page.evaluate(`$('#llamasampler_transport').val('auto').trigger('change')`);
+    await page.waitFor(`document.querySelector('#llamasampler_panel .llamasampler-ok')`, 15000, 'auto routing restored');
+    await new Promise(r => setTimeout(r, 500));
 
     /* ------------------------------------- 3. negative detection case -- */
     const negative = await page.evaluate(`(async () => {

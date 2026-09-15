@@ -16,6 +16,14 @@
     flex: 1 1 100%;
     font-size: calc(var(--mainFontSize) * 0.9);
     margin-bottom: 4px;
+    overflow-wrap: anywhere;
+}
+
+#llamasampler_panel .llamasampler-transport {
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 14em;
+    margin: 0;
 }
 
 #llamasampler_panel .llamasampler-ok {

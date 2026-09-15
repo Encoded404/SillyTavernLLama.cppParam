@@ -19,12 +19,17 @@ import {
     GROUP_ORDER,
     GROUP_TITLES,
     PARAM_METADATA,
+    PROP_TRANSPORTS,
     specFor,
     coerceValue,
     parseCliFlags,
     buildIncludeBody,
     propsUrlFromBase,
     isLlamaCppProps,
+    isLoopbackHost,
+    transportOrderFor,
+    transportUrl,
+    transportLabel,
 } from './params.js';
 
 const MODULE = 'st_llamacpp_samplers';
@@ -83,6 +88,10 @@ function defaultState() {
         lastError: '',
         serverInfo: '',
         probedUrl: '',
+        /// Which route worked last time: direct | plugin | corsProxy.
+        transport: '',
+        /// 'auto' or a forced transport name.
+        forcedTransport: 'auto',
         /// Raw `default_generation_settings.params` from the last successful probe.
         params: {},
         /// key -> { enabled, value, touched }
@@ -183,11 +192,104 @@ function collectOverrides() {
 
 /* ------------------------------------------------------------------ probe -- */
 
+/** fetch() with an abort timeout. */
+async function fetchWithTimeout(url, options, timeoutMs = DETECT_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** Headers for one transport. */
+function transportOptions(transport, apiKey) {
+    switch (transport) {
+        // Same-origin call to SillyTavern, so it needs the usual request headers.
+        case 'plugin':
+            return { headers: ctx().getRequestHeaders() };
+        // llama.cpp may be behind --api-key.
+        case 'direct':
+            return { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} };
+        // /proxy/ strips our credentials anyway.
+        default:
+            return { headers: {} };
+    }
+}
+
+/**
+ * Try every plausible route to `/props` and return the first that yields a
+ * llama.cpp payload.
+ *
+ * Routing matters here: when llama.cpp is bound to loopback but the page was
+ * loaded from somewhere else, llama.cpp is next to the SillyTavern *server*, so
+ * the lookup has to happen there.
+ *
+ * @returns {Promise<{payload: object|null, transport: string, attempts: string[]}>}
+ */
+async function fetchProps(baseUrl) {
+    const settings = state();
+    const apiKey = getCustomApiKey();
+
+    const order = settings.forcedTransport && settings.forcedTransport !== 'auto'
+        ? [settings.forcedTransport]
+        : transportOrderFor(baseUrl, location.hostname, settings.transport);
+
+    const attempts = [];
+
+    for (const transport of order) {
+        try {
+            const response = await fetchWithTimeout(
+                transportUrl(transport, baseUrl),
+                transportOptions(transport, apiKey),
+            );
+
+            if (!response.ok) {
+                attempts.push(`${transportLabel(transport)}: HTTP ${response.status}`);
+                continue;
+            }
+
+            const payload = await response.json();
+            if (!isLlamaCppProps(payload)) {
+                attempts.push(`${transportLabel(transport)}: not a llama.cpp /props response`);
+                continue;
+            }
+
+            if (settings.transport !== transport) log(`reaching /props via ${transportLabel(transport)}`);
+            return { payload, transport, attempts };
+        } catch (error) {
+            const reason = error?.name === 'AbortError' ? `no response in ${DETECT_TIMEOUT_MS}ms` : (error?.message || String(error));
+            attempts.push(`${transportLabel(transport)}: ${reason}`);
+        }
+    }
+
+    return { payload: null, transport: '', attempts };
+}
+
+/** A short, actionable hint when every route failed. */
+function routingHint(baseUrl) {
+    let targetHost = '';
+    try {
+        targetHost = new URL(baseUrl).hostname;
+    } catch {
+        return '';
+    }
+
+    // llama.cpp only speaks loopback to the server, and the browser is elsewhere.
+    const looksRemote = isLoopbackHost(targetHost) && !isLoopbackHost(location.hostname);
+    if (!looksRemote) return '';
+
+    return ' llama.cpp is on loopback but this page was not served from loopback, so the browser cannot reach it. '
+        + 'Route the lookup through SillyTavern instead: install the bundled server plugin and set '
+        + 'enableServerPlugins: true in config.yaml, or set enableCorsProxy: true.';
+}
+
 async function probeServer({ quiet = false } = {}) {
     const settings = state();
-    const url = propsUrlFromBase(ctx().chatCompletionSettings.custom_url);
+    const baseUrl = ctx().chatCompletionSettings.custom_url;
 
-    if (!url) {
+    if (!propsUrlFromBase(baseUrl)) {
         settings.detected = false;
         settings.lastError = 'Set the Custom endpoint URL first.';
         render();
@@ -195,29 +297,16 @@ async function probeServer({ quiet = false } = {}) {
         return;
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DETECT_TIMEOUT_MS);
+    const { payload, transport, attempts } = await fetchProps(baseUrl);
 
-    try {
-        const headers = {};
-        const key = getCustomApiKey();
-        if (key) headers.Authorization = `Bearer ${key}`;
-
-        const response = await fetch(url, { headers, signal: controller.signal });
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status} from ${url}`);
-        }
-
-        const payload = await response.json();
-        if (!isLlamaCppProps(payload)) {
-            throw new Error('no default_generation_settings.params in the response');
-        }
-
+    if (payload) {
         const params = payload.default_generation_settings.params;
+
         settings.detected = true;
         settings.lastError = '';
+        settings.transport = transport;
         settings.params = params;
-        settings.probedUrl = url;
+        settings.probedUrl = propsUrlFromBase(baseUrl);
         settings.serverInfo = [
             payload.build_info,
             payload.model_alias,
@@ -235,21 +324,15 @@ async function probeServer({ quiet = false } = {}) {
             }
         }
 
-        log(`detected llama.cpp at ${url} with ${Object.keys(params).length} parameters`);
+        log(`detected llama.cpp with ${Object.keys(params).length} parameters via ${transportLabel(transport)}`);
         if (!quiet) toastr.success(`Found ${Object.keys(params).length} parameters.`, 'llama.cpp samplers');
-    } catch (error) {
+    } else {
         settings.detected = false;
-        settings.probedUrl = url;
-        settings.lastError = error?.name === 'AbortError'
-            ? `timed out after ${DETECT_TIMEOUT_MS}ms reaching ${url}`
-            : `${error?.message || error}`;
-
-        if (!quiet) {
-            toastr.error(settings.lastError, 'llama.cpp samplers');
-            console.debug(LOG, 'probe failed:', error);
-        }
-    } finally {
-        clearTimeout(timer);
+        settings.transport = '';
+        settings.probedUrl = propsUrlFromBase(baseUrl);
+        settings.lastError = attempts.join('; ') + routingHint(baseUrl);
+        if (!quiet) toastr.error(attempts[0] || 'Could not reach llama.cpp', 'llama.cpp samplers');
+        warn('probe failed:', attempts);
     }
 
     saveSettings();
@@ -377,7 +460,8 @@ function renderStatus() {
     const settings = state();
 
     if (settings.detected) {
-        return `<span class="llamasampler-ok">llama.cpp detected</span> <span class="llamasampler-muted">${escapeAttr(settings.serverInfo || '')}</span>`;
+        const route = settings.transport ? ` <span class="llamasampler-muted">via ${escapeAttr(transportLabel(settings.transport))}</span>` : '';
+        return `<span class="llamasampler-ok">llama.cpp detected</span>${route} <span class="llamasampler-muted">${escapeAttr(settings.serverInfo || '')}</span>`;
     }
     if (settings.lastError) {
         return `<span class="llamasampler-err">Not detected</span> <span class="llamasampler-muted">${escapeAttr(settings.lastError)}</span>`;
@@ -502,6 +586,16 @@ function bindEvents() {
 
     $panel.on('click', '.llamasampler-refresh', () => probeServer());
 
+    $panel.on('change', '#llamasampler_transport', function () {
+        const settings = state();
+        const value = String(jQuery(this).val());
+        settings.forcedTransport = value === 'auto' || PROP_TRANSPORTS.includes(value) ? value : 'auto';
+        // Forget the remembered route so the new preference is re-resolved.
+        settings.transport = '';
+        saveSettings();
+        probeServer();
+    });
+
     $panel.on('click', '.llamasampler-cli-toggle', () => {
         const settings = state();
         settings.cliOpen = !settings.cliOpen;
@@ -548,6 +642,7 @@ function restoreUiState() {
     const settings = state();
     jQuery('#llamasampler_cli').val(settings.cliText || '');
     jQuery('#llamasampler_cli_box').toggle(!!settings.cliOpen);
+    jQuery('#llamasampler_transport').val(settings.forcedTransport || 'auto');
 }
 
 async function mountAndWire() {

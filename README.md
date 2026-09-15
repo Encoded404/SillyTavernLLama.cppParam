@@ -18,6 +18,10 @@ through `custom_include_body`, but there is no UI for it. This extension is that
   server, and every parameter in that payload becomes a control. Any other
   OpenAI-compatible server is reported as "Not detected" instead of silently
   producing broken requests.
+- **Knows how to reach it.** When llama.cpp is only reachable from the SillyTavern
+  *server* — the usual `127.0.0.1`-on-the-same-box setup — the lookup is routed
+  through SillyTavern instead of the browser. See
+  [Networking](#networking-when-llamacpp-is-not-reachable-from-the-browser).
 - **Full parameter coverage, with a fallback.** Ships a curated table of
   descriptions and slider ranges transcribed from llama.cpp's own server field
   schema. Parameters it does not know about are still rendered: the label comes
@@ -40,11 +44,87 @@ through `custom_include_body`, but there is no UI for it. This extension is that
 - SillyTavern **1.18.0** or newer.
 - A **llama.cpp** server (the `/props` endpoint and the extra request-body
   parameters). Recent builds are fine; older ones may expose fewer parameters.
-- `/props` must be reachable **from your browser**, so CORS applies. llama.cpp
-  defaults to `--cors-origins '*'`, which works. If you locked it down, allow
-  SillyTavern's origin instead (e.g. `--cors-origins 'http://localhost:8000'`).
+- `/props` must be reachable from whatever asks for it, and **which machine that is
+  matters**. llama.cpp defaults to `--cors-origins '*'`, which covers the browser
+  route; if you locked CORS down, allow SillyTavern's origin instead (e.g.
+  `--cors-origins 'http://localhost:8000'`). See
+  [Networking](#networking-when-llamacpp-is-not-reachable-from-the-browser).
 - If llama.cpp runs with `--api-key`, put the same key in SillyTavern's Custom
-  endpoint API key field; the extension forwards it to `/props`.
+  endpoint API key field; the extension forwards it.
+
+## Networking: when llama.cpp is not reachable from the browser
+
+The extension discovers parameters by reading llama.cpp's `/props`. It can do that
+in three ways, and it picks one automatically:
+
+| Route | Who makes the request | When it applies |
+| --- | --- | --- |
+| `direct` | your browser | llama.cpp is reachable from the machine you are browsing from |
+| `server plugin` | the SillyTavern server | llama.cpp is only reachable from the server (the bundled plugin) |
+| `CORS proxy` | the SillyTavern server | same, using SillyTavern's built-in proxy instead |
+
+Generation always works regardless — SillyTavern itself makes those requests
+server-side. Only the parameter *discovery* is affected.
+
+**The case this exists for:** llama.cpp started with `--host 127.0.0.1` on the same
+machine as the SillyTavern server, while you browse from a different machine, with
+SillyTavern's Custom URL set to `http://127.0.0.1:8080/v1`. A browser fetch would
+either fail or — worse — silently find an *unrelated* llama.cpp running on your own
+laptop. So when the target host is loopback and the page was not served from
+loopback, the extension deliberately goes through the server first.
+
+### Route 1 — server plugin (recommended for remote setups)
+
+The repo doubles as a SillyTavern server plugin. Install it either with
+SillyTavern's own plugin manager:
+
+```bash
+node plugins.js install https://github.com/Encoded404/SillyTavernLLama.cppParam
+```
+
+or with the bundled installer:
+
+```bash
+node install.mjs --dir ~/SillyTavern --with-plugin
+```
+
+Then set `enableServerPlugins: true` in `config.yaml` (it defaults to `false`) and
+restart. You should see this on startup:
+
+```
+Initializing plugin from .../plugins/.../server-plugin.mjs
+1 server plugin(s) are currently loaded.
+```
+
+The plugin exposes `GET /api/plugins/llamacpp-samplers/props?url=…`. It is
+deliberately narrow: it can only ever request a `/props` path, never an arbitrary
+URL path, and it refuses non-http(s) URLs and embedded credentials. It is mounted
+after SillyTavern's CSRF, login and whitelist middleware, so it inherits the same
+access control as the rest of the API. Like every server plugin it is not
+sandboxed — install plugins only from sources you trust.
+
+### Route 2 — SillyTavern's built-in CORS proxy (no install)
+
+If you would rather not enable server plugins, turn on the proxy instead:
+
+```yaml
+enableCorsProxy: true
+```
+
+The extension then reads `/props` via SillyTavern's `/proxy/` endpoint. Note this
+enables a general-purpose proxy for anything that can reach your SillyTavern
+(and is exempted from CSRF protection, which is why it ships disabled), so prefer
+the plugin if you have a choice.
+
+### Forcing a route
+
+The **Route:** dropdown in the panel overrides the automatic choice: `auto`
+(default), `direct`, `server plugin`, or `CORS proxy`. The status line always
+reports which route actually worked, which makes misconfiguration obvious:
+
+```
+llama.cpp detected via SillyTavern server plugin  b6011 · my-model · Q4_K_M · n_ctx 8192
+```
 
 ## Installation
 
@@ -73,8 +153,9 @@ extension, but this copies only the files SillyTavern needs:
 
 ```bash
 node install.mjs --dir ~/SillyTavern
-node install.mjs --dir ~/SillyTavern --dry-run     # preview
-node install.mjs --dir ~/SillyTavern --uninstall
+node install.mjs --dir ~/SillyTavern --with-plugin   # also install the server plugin
+node install.mjs --dir ~/SillyTavern --dry-run       # preview
+node install.mjs --dir ~/SillyTavern --uninstall     # removes both
 ```
 
 Restart SillyTavern afterwards. The extension appears in the *Extensions* list as
@@ -146,27 +227,35 @@ The repository root is the extension, so it can be cloned straight into
 `third-party/`.
 
 ```
-manifest.json     SillyTavern extension manifest
-index.js          entry point: UI + the CHAT_COMPLETION_SETTINGS_READY merge
-params.js         pure logic: metadata table, inference, YAML, CLI parser
-settings.html     Handlebars template for the panel chrome
-style.css         panel styling
-install.mjs       optional copy-based installer / uninstaller
-test/             unit + end-to-end tests (not shipped to SillyTavern's runtime)
+manifest.json      SillyTavern extension manifest
+index.js           entry point: UI + the CHAT_COMPLETION_SETTINGS_READY merge
+params.js          pure logic: metadata table, inference, YAML, CLI parser, routing
+settings.html      Handlebars template for the panel chrome
+style.css          panel styling
+server-plugin.mjs  optional server plugin: /props on the server's behalf
+install.mjs        optional copy-based installer / uninstaller
+test/              unit + end-to-end tests (not shipped to SillyTavern's runtime)
 ```
 
-`params.js` has no DOM and no SillyTavern imports so that the browser extension and
-the node tests share one implementation.
+The repository root is both the extension and the server plugin, which is why
+`package.json` carries a `main` field: SillyTavern's plugin loader reads it and
+loads `server-plugin.mjs`, instead of stumbling over the browser entry point
+(`index.js`) that shares the directory.
+
+`params.js` has no DOM and no SillyTavern imports so that the browser extension, the
+server plugin and the node tests all share one implementation — the `/props` URL
+construction and the route ordering in particular are used by both halves.
 
 ## Development
 
 ```bash
 npm install
-npm test              # 23 unit tests
+npm test              # 30 unit tests
 ```
 
-The unit suite covers CLI parsing, YAML emission/merging and spec inference, and
-validates the generated YAML against the real `yaml` package SillyTavern uses.
+The unit suite covers CLI parsing, YAML emission/merging, spec inference, and the
+routing decisions (which transport is preferred for a given target and page host).
+It validates the generated YAML against the real `yaml` package SillyTavern uses.
 
 End-to-end suites need a running stack:
 
@@ -182,15 +271,33 @@ node test/e2e-browser.mjs       # also needs Chrome with --remote-debugging-port
   override is replaced exactly once, and that the user's own YAML survives.
 - `test/e2e-browser.mjs` drives real SillyTavern in headless Chrome: panel
   mounting, `/props` detection (including the negative case), row construction from
-  live values, unknown-key fallback, CLI import, the in-page merge, and a real
-  generation whose request lands on the mock. It disables SillyTavern's bundled
-  Quick Reply extension for the run, because that extension's
+  live values, unknown-key fallback, CLI import, the in-page merge, both server-side
+  routes, and a real generation whose request lands on the mock. It disables
+  SillyTavern's bundled Quick Reply extension for the run, because that extension's
   `GENERATION_AFTER_COMMANDS` hook blocks generation in a headless browser.
+
+To exercise both server-side routes, the SillyTavern under test needs
+`enableServerPlugins: true` (with the plugin installed) and `enableCorsProxy: true`.
+The CORS proxy check skips itself when the proxy is off, rather than failing.
+
+The plugin endpoint is also exercised directly, including its rejections:
+
+```bash
+curl 'http://127.0.0.1:8000/api/plugins/llamacpp-samplers/props?url=http://127.0.0.1:8080/v1'
+curl 'http://127.0.0.1:8000/api/plugins/llamacpp-samplers/props?url=file:///etc/passwd'   # 400
+```
 
 ## Limitations
 
 - Detection is llama.cpp-specific by design. Other OpenAI-compatible servers expose
   no way to enumerate their samplers, so nothing can be auto-discovered there.
+- The server plugin can be pointed at any host, since that is the whole point of it
+  (reaching llama.cpp from the server's perspective). It is limited to `/props`
+  paths and sits behind SillyTavern's auth, but if you enable server plugins at all
+  you are already trusting them with your machine — see SillyTavern's own warning.
+- The automatic route choice compares hostnames only, not reachability. If you have
+  llama.cpp running on both your client and the server, or you reach llama.cpp
+  through a tunnel, use the **Route:** dropdown to pin it.
 - `/props` reports parameter *values*, not types, ranges or descriptions — the
   server never serialises its schema. Curated metadata comes from reading
   llama.cpp's source, so a brand-new parameter appears as an inferred `?` row until

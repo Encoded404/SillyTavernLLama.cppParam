@@ -671,16 +671,121 @@ export function buildIncludeBody(existingYaml, overrides) {
 /**
  * Normalize a base URL so `/props` can be requested from it.
  * SillyTavern's custom URL is normally `http://host:port/v1`.
+ *
+ * Idempotent (an existing `/props` is not doubled) and drops any query string or
+ * fragment, so a base like `http://host/admin?x=1` cannot produce
+ * `http://host/admin?x=1/props`.
  */
 export function propsUrlFromBase(baseUrl) {
-    const trimmed = String(baseUrl || '').trim().replace(/\/+$/, '');
-    if (!trimmed) return '';
-    const root = trimmed.replace(/\/v1$/i, '');
-    return `${root}/props`;
+    const raw = String(baseUrl || '').trim();
+    if (!raw) return '';
+
+    try {
+        const url = new URL(raw);
+        url.search = '';
+        url.hash = '';
+
+        let pathname = url.pathname.replace(/\/+$/, '');
+        if (!/\/props$/i.test(pathname)) {
+            pathname = pathname.replace(/\/v1$/i, '') + '/props';
+        }
+
+        url.pathname = pathname;
+        return url.href;
+    } catch {
+        // Not an absolute URL: fall back to string handling.
+        const trimmed = raw.replace(/\/+$/, '');
+        if (/\/props$/i.test(trimmed)) return trimmed;
+        return `${trimmed.replace(/\/v1$/i, '')}/props`;
+    }
 }
 
 /** True when a `/props` payload looks like a llama.cpp server. */
 export function isLlamaCppProps(payload) {
     const params = payload?.default_generation_settings?.params;
     return !!params && typeof params === 'object' && !Array.isArray(params);
+}
+
+/** Plugin id; also the last segment of the plugin's API route. */
+export const PLUGIN_ID = 'llamacpp-samplers';
+
+/** Every way we can reach the llama.cpp HTTP API. */
+export const PROP_TRANSPORTS = ['direct', 'plugin', 'corsProxy'];
+
+/**
+ * True for host names that only ever mean "the machine making the request".
+ * Ports are not part of a hostname, so they are ignored here.
+ */
+export function isLoopbackHost(hostname) {
+    const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost'
+        || host === '::1'
+        || host === '0.0.0.0'
+        || host.endsWith('.localhost')
+        || /^127\./.test(host);
+}
+
+/**
+ * Resolve a `/props` value from whatever the caller supplied: a base URL
+ * (`http://host:8080/v1`) or an already absolute `/props` URL.
+ */
+export function resolvePropsTarget(baseUrl) {
+    return propsUrlFromBase(baseUrl);
+}
+
+/**
+ * Order the transports should be tried in.
+ *
+ * The interesting case: llama.cpp bound to loopback while the page was loaded
+ * from somewhere else. That means llama.cpp lives next to the SillyTavern
+ * *server*, not next to the browser, so a direct fetch from the browser would
+ * either fail or - worse - silently find a *different* llama.cpp running on the
+ * client's own machine. Those setups must go through the server first.
+ *
+ * @param {string} baseUrl SillyTavern's configured custom endpoint URL.
+ * @param {string} pageHostname window.location.hostname of the client.
+ * @param {string} [cachedTransport] Transport that worked last time, tried first.
+ * @returns {string[]} Transport names, most promising first.
+ */
+export function transportOrderFor(baseUrl, pageHostname, cachedTransport) {
+    let targetHost = '';
+    try {
+        targetHost = new URL(String(baseUrl)).hostname;
+    } catch {
+        targetHost = '';
+    }
+
+    const mustGoThroughServer = isLoopbackHost(targetHost) && !isLoopbackHost(pageHostname);
+
+    const preferred = mustGoThroughServer
+        ? ['plugin', 'corsProxy', 'direct']
+        : ['direct', 'plugin', 'corsProxy'];
+
+    if (cachedTransport && preferred.includes(cachedTransport)) {
+        return [cachedTransport, ...preferred.filter(transport => transport !== cachedTransport)];
+    }
+
+    return preferred;
+}
+
+/** Build the request URL for one transport. */
+export function transportUrl(transport, baseUrl) {
+    switch (transport) {
+        case 'plugin':
+            return `/api/plugins/${PLUGIN_ID}/props?url=${encodeURIComponent(resolvePropsTarget(baseUrl))}`;
+        case 'corsProxy':
+            return `/proxy/${resolvePropsTarget(baseUrl)}`;
+        default:
+            return resolvePropsTarget(baseUrl);
+    }
+}
+
+/** Human readable transport name for the UI. */
+export function transportLabel(transport) {
+    switch (transport) {
+        case 'plugin': return 'SillyTavern server plugin';
+        case 'corsProxy': return 'SillyTavern CORS proxy';
+        case 'direct': return 'direct from browser';
+        default: return transport;
+    }
 }

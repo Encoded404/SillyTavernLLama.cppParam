@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import {
     PARAM_METADATA,
+    PLUGIN_ID,
     parseCliFlags,
     specFor,
     inferSpec,
@@ -20,6 +21,10 @@ import {
     buildIncludeBody,
     propsUrlFromBase,
     isLlamaCppProps,
+    isLoopbackHost,
+    transportOrderFor,
+    transportUrl,
+    resolvePropsTarget,
     tokenize,
 } from '../params.js';
 
@@ -288,4 +293,90 @@ test('buildIncludeBody: YAML output round-trips scalars correctly', async (t) =>
     const overrides = { a: 1, b: 1.5, c: true, d: false, e: 'plain', f: 'with: colon', g: ['x', 'y'], h: { n: 1 } };
     const parsed = YAML.parse(emitYaml(overrides));
     assert.deepEqual(parsed, overrides);
+});
+
+/* ------------------------------------------------------------- routing -- */
+
+test('isLoopbackHost: recognises loopback names', () => {
+    for (const host of ['127.0.0.1', '127.1.2.3', 'localhost', 'LOCALHOST', '::1', '[::1]', 'foo.localhost', '0.0.0.0']) {
+        assert.equal(isLoopbackHost(host), true, `${host} should be loopback`);
+    }
+    for (const host of ['192.168.1.50', 'llama.example.com', '10.0.0.5', 'my-pc', '']) {
+        assert.equal(isLoopbackHost(host), false, `${host} should not be loopback`);
+    }
+});
+
+test('transportOrderFor: same machine prefers a direct fetch', () => {
+    // Page served from loopback, llama.cpp on loopback: the browser can reach it.
+    assert.deepEqual(
+        transportOrderFor('http://127.0.0.1:8080/v1', '127.0.0.1'),
+        ['direct', 'plugin', 'corsProxy'],
+    );
+    // Both on a LAN host: still the browser's own network.
+    assert.deepEqual(
+        transportOrderFor('http://192.168.1.50:8080/v1', '192.168.1.50'),
+        ['direct', 'plugin', 'corsProxy'],
+    );
+});
+
+test('transportOrderFor: remote browser with local llama.cpp must go through the server', () => {
+    // The user's setup: llama.cpp on 127.0.0.1 next to SillyTavern, browsing from elsewhere.
+    assert.deepEqual(
+        transportOrderFor('http://127.0.0.1:8080/v1', '192.168.1.50'),
+        ['plugin', 'corsProxy', 'direct'],
+    );
+    assert.deepEqual(
+        transportOrderFor('http://127.0.0.1:8080/v1', 'tavern.example.com'),
+        ['plugin', 'corsProxy', 'direct'],
+    );
+    // A public llama.cpp is reachable from the browser, so no server hop needed.
+    assert.deepEqual(
+        transportOrderFor('https://llama.example.com/v1', 'tavern.example.com'),
+        ['direct', 'plugin', 'corsProxy'],
+    );
+});
+
+test('transportOrderFor: an unparsable URL falls back to a direct attempt', () => {
+    assert.deepEqual(transportOrderFor('not a url', '127.0.0.1'), ['direct', 'plugin', 'corsProxy']);
+});
+
+test('transportOrderFor: a remembered route is tried first', () => {
+    assert.deepEqual(
+        transportOrderFor('http://127.0.0.1:8080/v1', '192.168.1.50', 'corsProxy'),
+        ['corsProxy', 'plugin', 'direct'],
+    );
+    // A remembered route that does not apply here is ignored.
+    assert.deepEqual(
+        transportOrderFor('http://127.0.0.1:8080/v1', '127.0.0.1', 'plugin'),
+        ['plugin', 'direct', 'corsProxy'],
+    );
+});
+
+test('transportUrl: builds the right URL per route', () => {
+    const base = 'http://127.0.0.1:8080/v1';
+    assert.equal(transportUrl('direct', base), 'http://127.0.0.1:8080/props');
+    assert.equal(transportUrl('corsProxy', base), '/proxy/http://127.0.0.1:8080/props');
+    assert.equal(
+        transportUrl('plugin', base),
+        `/api/plugins/${PLUGIN_ID}/props?url=${encodeURIComponent('http://127.0.0.1:8080/props')}`,
+    );
+});
+
+test('resolvePropsTarget: accepts a base URL or an already absolute /props URL', () => {
+    assert.equal(resolvePropsTarget('http://host:8080/v1'), 'http://host:8080/props');
+    assert.equal(resolvePropsTarget('http://host:8080/'), 'http://host:8080/props');
+    assert.equal(resolvePropsTarget('http://host:8080/props'), 'http://host:8080/props');
+    assert.equal(resolvePropsTarget('http://host:8080/props/'), 'http://host:8080/props');
+});
+
+test('propsUrlFromBase: drops query strings and fragments', () => {
+    assert.equal(propsUrlFromBase('http://host:8080/admin?x=1'), 'http://host:8080/admin/props');
+    assert.equal(propsUrlFromBase('http://host:8080/v1?x=1'), 'http://host:8080/props');
+    assert.equal(propsUrlFromBase('http://host:8080/v1#frag'), 'http://host:8080/props');
+});
+
+test('propsUrlFromBase: keeps a reverse-proxy path prefix and never doubles /props', () => {
+    assert.equal(propsUrlFromBase('http://gw/llama/v1'), 'http://gw/llama/props');
+    assert.equal(propsUrlFromBase('http://host:8080/props'), 'http://host:8080/props');
+    assert.equal(propsUrlFromBase('http://host:8080/props/props'), 'http://host:8080/props/props');
 });
