@@ -818,14 +818,16 @@ export function pickApiKey(clientAuthorization, storedKey) {
  *
  * SillyTavern's proxy turns an upstream 401 into a 400 while keeping the status
  * text "Unauthorized" (forwardFetchResponse in src/util.js), so the status code
- * alone is misleading and the status text has to be considered too.
+ * alone is misleading and the status text has to be considered too. A plain 400
+ * ("Bad Request") is not treated as an auth failure.
  *
  * @param {{status: number, statusText?: string, text?: () => Promise<string>}} response
- * @returns {Promise<{unauthorized: boolean, text: string}>}
+ * @returns {Promise<{status: number, unauthorized: boolean, text: string}>}
  */
 export async function describeFailure(response) {
-    const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+    const statusLine = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
 
+    // The server plugin reports auth failures explicitly in its JSON body.
     let unauthorized = response.status === 401
         || response.status === 403
         || (response.status === 400 && /unauthorized/i.test(response.statusText || ''));
@@ -844,15 +846,18 @@ export async function describeFailure(response) {
                 } catch {
                     detail = raw;
                 }
-                if (!detail) detail = raw;
             }
         } catch {
             // Body already consumed or unreadable; the status alone will do.
         }
     }
 
+    // SillyTavern's 404 page is a full HTML document; quoting it helps nobody.
+    if (detail.startsWith('<')) detail = '';
+
     return {
+        status: response.status,
         unauthorized,
-        text: detail ? `${status}: ${String(detail).slice(0, 200)}` : status,
+        text: detail ? `${statusLine}: ${detail.slice(0, 200)}` : statusLine,
     };
 }

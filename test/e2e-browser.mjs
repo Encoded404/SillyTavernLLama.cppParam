@@ -213,6 +213,28 @@ try {
         assert.ok(negative.includes('Not detected'), negative);
     });
 
+    /* ---------------------------- 3b. a pinned route explains itself -- */
+    // Pinning means "only this route", which is a common reason a working setup
+    // still fails, so the message has to say so.
+    const pinned = await page.evaluate(`(async () => {
+        $('#custom_api_url_text').val('http://127.0.0.1:9/v1').trigger('input').trigger('change');
+        $('#llamasampler_transport').val('direct').trigger('change');
+        await new Promise(r => setTimeout(r, 5000));
+        const text = document.querySelector('#llamasampler_panel .llamasampler-status').innerText;
+        $('#llamasampler_transport').val('auto').trigger('change');
+        $('#custom_api_url_text').val(${JSON.stringify(`${MOCK_URL}/v1`)}).trigger('input').trigger('change');
+        await new Promise(r => setTimeout(r, 1500));
+        return text;
+    })()`);
+
+    check('a pinned route says so instead of silently reporting only one failure', () => {
+        assert.ok(pinned.includes('Route is pinned to'), pinned);
+        assert.ok(!pinned.includes('<!DOCTYPE'), 'should not quote SillyTavern\'s HTML 404 page');
+    });
+
+    await page.waitFor(`document.querySelector('#llamasampler_panel .llamasampler-ok')`, 15000, 'detection restored');
+    await new Promise(r => setTimeout(r, 500));
+
     /* --------------------------------------------- 4. rows built from props -- */
     const rows = JSON.parse(await page.evaluate(`JSON.stringify(
         [...document.querySelectorAll('#llamasampler_panel .llamasampler-row')].map(r => r.dataset.key)

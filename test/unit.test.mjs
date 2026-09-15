@@ -420,6 +420,21 @@ test('describeFailure: a plain failure is not reported as auth', async () => {
     const failure = await describeFailure(fakeResponse(404, 'Not Found', ''));
     assert.equal(failure.unauthorized, false);
     assert.equal(failure.text, '404 Not Found');
+    assert.equal(failure.status, 404);
+});
+
+test('describeFailure: an ordinary 400 is not mistaken for an auth failure', async () => {
+    // Only a 400 whose status text says "Unauthorized" is SillyTavern's rewritten
+    // upstream 401; a genuine 400 must stay a plain 400.
+    const failure = await describeFailure(fakeResponse(400, 'Bad Request', '{"error":{"message":"bad request"}}'));
+    assert.equal(failure.unauthorized, false);
+    assert.match(failure.text, /400 Bad Request/);
+});
+
+test('describeFailure: does not quote the HTML 404 page SillyTavern serves', async () => {
+    const failure = await describeFailure(fakeResponse(404, 'Not Found', '<!DOCTYPE html><html><body>Not found</body></html>'));
+    assert.equal(failure.text, '404 Not Found');
+    assert.ok(!failure.text.includes('DOCTYPE'), failure.text);
 });
 
 test('describeFailure: tolerates an unreadable body and truncates a huge one', async () => {

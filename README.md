@@ -153,6 +153,25 @@ save it.
 The extension tells you this directly when it sees a rejected request, rather than
 just reporting a bare status code.
 
+### "Route is pinned to …"
+
+The **Route:** dropdown is a *pin*, not a preference: choosing `server plugin`
+means "use only this route". That is useful for diagnosing which path works, but it
+also means a working setup can still fail — and only one failure will be reported.
+If you see this, set **Route** back to `auto`.
+
+### "the server plugin is not installed, or enableServerPlugins is false"
+
+The extension reached SillyTavern's API and got its 404. Either the plugin was
+never installed (`plugins/<name>/server-plugin.mjs`), or `enableServerPlugins` is
+still `false`. Check the SillyTavern startup log for:
+
+```
+Initializing plugin from .../plugins/.../server-plugin.mjs
+```
+
+If that line is missing, the plugin did not load and no server-side route will work.
+
 ### Everything else
 
 | Symptom | Likely cause |

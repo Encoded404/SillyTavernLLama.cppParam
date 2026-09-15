@@ -221,6 +221,17 @@ function transportOptions(transport, apiKey) {
     return { headers: { ...auth } };
 }
 
+/** Turn a failed attempt into a message, adding advice specific to the route. */
+function describeAttempt(transport, failure) {
+    const message = `${transportLabel(transport)}: ${failure.text}`;
+
+    if (transport === 'plugin' && failure.status === 404) {
+        return `${message} - the server plugin is not installed, or enableServerPlugins is false in config.yaml`;
+    }
+
+    return message;
+}
+
 /**
  * Try every plausible route to `/props` and return the first that yields a
  * llama.cpp payload.
@@ -252,7 +263,7 @@ async function fetchProps(baseUrl) {
             if (!response.ok) {
                 const failure = await describeFailure(response);
                 unauthorized = unauthorized || failure.unauthorized;
-                attempts.push(`${transportLabel(transport)}: ${failure.text}`);
+                attempts.push(describeAttempt(transport, failure));
                 continue;
             }
 
@@ -336,7 +347,17 @@ async function probeServer({ quiet = false } = {}) {
         settings.detected = false;
         settings.transport = '';
         settings.probedUrl = propsUrlFromBase(baseUrl);
-        settings.lastError = attempts.join('; ') + routingHint(baseUrl) + (unauthorized ? AUTH_HINT : '');
+
+        // A pinned route is the most common reason a working setup still fails,
+        // because pinning means "only this route" rather than "prefer this route".
+        const pinned = settings.forcedTransport && settings.forcedTransport !== 'auto'
+            ? `Route is pinned to "${transportLabel(settings.forcedTransport)}" - set Route to auto to try the others.`
+            : '';
+
+        settings.lastError = [pinned, attempts.join('; ')].filter(Boolean).join(' ')
+            + routingHint(baseUrl)
+            + (unauthorized ? AUTH_HINT : '');
+
         if (!quiet) toastr.error(attempts[0] || 'Could not reach llama.cpp', 'llama.cpp samplers');
         warn('probe failed:', attempts);
     }
